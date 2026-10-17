@@ -1,0 +1,33 @@
+{
+  "name": "firas-code",
+  "version": "2.0.0-trial.1",
+  "description": "Firas Code 2 — وكيل برمجة يعمل داخل الطرفية",
+  "type": "module",
+  "bin": {
+    "firas": "bin/firas.js",
+    "firas-code": "bin/firas.js",
+    "fc2": "bin/firas.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "files": [
+    "bin",
+    "src",
+    "vendor",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node bin/firas.js",
+    "test": "node scripts/run-tests.mjs"
+  },
+  "keywords": [
+    "firas",
+    "terminal",
+    "coding-agent",
+    "arabic"
+  ],
+  "license": "UNLICENSED",
+  "private": false
+}
