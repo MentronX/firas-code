@@ -12,6 +12,8 @@ const readme = read("README.md");
 const split = readme.indexOf("\n## English");
 const arabicPart = readme.slice(0, split);
 const englishPart = readme.slice(split);
+// Until the owner sets the repository the README carries the placeholder; afterwards it carries owner/repo.
+const repoInReadme = /raw\.githubusercontent\.com\/([^/\s]+\/[^/\s]+)\/main\/scripts\/install\.ps1/.exec(readme)?.[1] || "";
 
 describe("README.md", () => {
   test("has the Arabic section first and the English section second", () => {
@@ -22,12 +24,15 @@ describe("README.md", () => {
     assert.ok(!/## (Install|Safety|Troubleshooting)/.test(arabicPart));
   });
 
-  test("offers the three install ways in both languages, with the repository placeholder", () => {
+  test("offers the three install ways in both languages, short and full", () => {
+    assert.ok(repoInReadme === PLACEHOLDER || /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/.test(repoInReadme), "repository: " + repoInReadme);
     const commands = [
-      "irm https://raw.githubusercontent.com/" + PLACEHOLDER + "/main/scripts/install.ps1 | iex",
-      "[scriptblock]::Create((irm https://raw.githubusercontent.com/" + PLACEHOLDER + "/main/scripts/install.ps1))) -Code FC2-",
-      "curl -fsSL https://raw.githubusercontent.com/" + PLACEHOLDER + "/main/scripts/install.sh | bash",
-      "npx -y github:" + PLACEHOLDER
+      "irm firasai.org/get | iex",
+      "curl -fsSL firasai.org/get | bash",
+      "irm https://raw.githubusercontent.com/" + repoInReadme + "/main/scripts/install.ps1 | iex",
+      "[scriptblock]::Create((irm https://raw.githubusercontent.com/" + repoInReadme + "/main/scripts/install.ps1))) -Code FC2-",
+      "curl -fsSL https://raw.githubusercontent.com/" + repoInReadme + "/main/scripts/install.sh | bash",
+      "npx -y github:" + repoInReadme
     ];
     for (const part of [arabicPart, englishPart]) for (const command of commands) assert.ok(part.includes(command), command);
   });
@@ -88,7 +93,7 @@ describe("README.md", () => {
   test("becomes a clean README once the repository is set", () => {
     const dir = makeTemp("fc2-docs-");
     try {
-      fs.writeFileSync(path.join(dir, "README.md"), readme);
+      fs.writeFileSync(path.join(dir, "README.md"), readme.split(repoInReadme).join(PLACEHOLDER));
       replaceInTree(dir, PLACEHOLDER, "firas/firas-code");
       const filled = fs.readFileSync(path.join(dir, "README.md"), "utf8");
       assert.ok(!filled.includes(PLACEHOLDER));

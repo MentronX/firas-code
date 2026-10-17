@@ -19,6 +19,12 @@
 افتح PowerShell والصق هذا السطر:
 
 ```powershell
+irm firasai.org/get | iex
+```
+
+وإن لم يفتح الرابط القصير عندك فاستخدم الرابط الكامل:
+
+```powershell
 irm https://raw.githubusercontent.com/MentronX/firas-code/main/scripts/install.ps1 | iex
 ```
 
@@ -31,6 +37,12 @@ irm https://raw.githubusercontent.com/MentronX/firas-code/main/scripts/install.p
 يبحث المثبّت عن Node.js في جهازك، وإن لم يجده نزّل نسخة خاصة بالتطبيق بعد التحقق من سلامتها. يوضع كل شيء في المجلد `%USERPROFILE%\.firas-code`، ويمكنك إعادة تشغيل الأمر في أي وقت للتحديث.
 
 ### الطريقة الثانية: ماك ولينكس
+
+```bash
+curl -fsSL firasai.org/get | bash
+```
+
+والرابط الكامل عند الحاجة:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MentronX/firas-code/main/scripts/install.sh | bash
@@ -205,6 +217,12 @@ Pick one way. None of them needs administrator rights.
 **Windows (PowerShell)**
 
 ```powershell
+irm firasai.org/get | iex
+```
+
+If the short link does not open for you, use the full address:
+
+```powershell
 irm https://raw.githubusercontent.com/MentronX/firas-code/main/scripts/install.ps1 | iex
 ```
 
@@ -217,6 +235,12 @@ With your access code:
 The installer looks for Node.js on your computer. If there is none, it downloads a private copy and checks its SHA-256 first. Everything goes into `%USERPROFILE%\.firas-code`, and running the command again updates it.
 
 **macOS and Linux**
+
+```bash
+curl -fsSL firasai.org/get | bash
+```
+
+The full address, if needed:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MentronX/firas-code/main/scripts/install.sh | bash
