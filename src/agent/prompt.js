@@ -121,6 +121,17 @@ ${languageSection(lang)}
 - Permission mode: ${MODE_NOTES[mode] || MODE_NOTES.default}${tools}${windows}${instructionsSection(projectInstructions)}`;
 }
 
+/** Appended to the main prompt for an ultracode turn (the top effort level, or a message that names it). */
+export const ULTRACODE_NOTE = `# Ultracode
+The user asked for ultracode on this task: the most thorough way of working you have. Correctness and completeness matter more than speed or brevity here.
+1. Map the task first. Launch several Agent sub-agents in ONE message (kind "explore") to investigate independent parts at the same time: where the code lives, who calls it, its tests, the conventions around it. Read the key files yourself as well.
+2. Before changing anything, write a TodoWrite checklist that covers the whole task, and keep it current.
+3. Find the root cause, not the symptom. Weigh at least two approaches and state in one line why you chose one.
+4. Work in small steps and run the relevant check after each (build, tests, linter, or the program itself).
+5. When it works, launch at least two Agent sub-agents in ONE message to review the complete change independently, each from a different angle (one for correctness and edge cases, one for security and what else the change could break). Fix every real problem they find, then run the checks again.
+6. Finish with exactly what was verified and how, and anything you could not verify.
+For a question that needs no code change, still investigate in parallel and verify your claims in the files before you answer.`;
+
 const SUBAGENT_KINDS = {
   explore: "You are read-only: you can search and read, but you cannot edit files, run commands or ask questions. Investigate thoroughly, then report.",
   general: "You may read, edit files and run commands to complete the task, within the permissions the user grants. Keep changes minimal and verify them.",

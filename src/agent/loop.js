@@ -4,27 +4,34 @@
 import { MODEL_ID } from "../brand.js";
 import { t } from "../i18n/index.js";
 import "./strings.js";
-import { buildSystemPrompt, detectGit, formatDate, loadProjectInstructions } from "./prompt.js";
+import { buildSystemPrompt, detectGit, formatDate, loadProjectInstructions, ULTRACODE_NOTE } from "./prompt.js";
 import { estimateTokens, maybeCompact, pruneForRequest } from "./context.js";
 import { INTERRUPTED_RESULT, makeToolResult, repairMessages, sanitizeAssistantContent, textOf } from "./messages.js";
 import { ABORTED, abortGate, capHeadTail, firstLine, raceAbort, randomId, readUsage, safeUi } from "./support.js";
 
 export const MAX_STEPS = 60;
+// An ultracode turn maps, plans, builds, verifies and has its work reviewed: it gets room for all of it.
+export const ULTRA_MAX_STEPS = 150;
 export const MAX_CONTINUATIONS = 2;
 export const MAX_RESULT_CHARS = 100 * 1024;
 const MAX_PARALLEL_TOOLS = 10;
-const EFFORTS = ["off", "low", "medium", "high", "xhigh", "max"];
+const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultracode"];
 const CONTINUE_TEXT = "Continue exactly where you stopped. Do not repeat what you already wrote.";
 
-/** Effort level -> the request fields that carry it. `off` sends no thinking fields at all. */
+/**
+ * Effort level -> the request fields that carry it. Ultracode travels as the service's own top level ("max"): what
+ * makes a turn ultracode is how the agent works (ULTRACODE_NOTE and the larger step budget), not a field.
+ */
 export function requestShape(effort) {
-  const level = EFFORTS.includes(effort) ? effort : "medium";
-  const shape = { max_tokens: level === "xhigh" || level === "max" ? 32000 : 16000 };
-  if (level !== "off") {
-    shape.thinking = { type: "adaptive" };
-    shape.output_config = { effort: level };
-  }
-  return shape;
+  const level = EFFORTS.includes(effort) ? effort : effort === "off" ? "low" : "medium";
+  const wire = level === "ultracode" ? "max" : level;
+  return { max_tokens: wire === "xhigh" || wire === "max" ? 32000 : 16000, thinking: { type: "adaptive" }, output_config: { effort: wire } };
+}
+
+/** The system prompt (a string, or a function returning one) with the ultracode instructions after it. */
+function withUltracode(system) {
+  if (typeof system === "function") return () => `${system()}\n\n${ULTRACODE_NOTE}`;
+  return `${system}\n\n${ULTRACODE_NOTE}`;
 }
 
 function buildRequest({ system, tools, messages, effort }) {
@@ -610,11 +617,14 @@ export async function runUserTurn({ session, text, ui, client, toolbox, permissi
     session.usage.turns += 1;
     session.save();
     const prompt = system ?? await composeSystem({ session, toolbox, permissions, lang, signal: abortSignal });
+    const level = effort ?? config?.effort ?? "medium";
+    const ultra = level === "ultracode";
     outcome = await runAgentLoop({
       session, ui: u, client, toolbox, permissions, config,
-      effort: effort ?? config?.effort ?? "medium",
+      effort: level,
       signal: abortSignal,
-      system: prompt,
+      system: ultra ? withUltracode(prompt) : prompt,
+      maxSteps: ultra ? ULTRA_MAX_STEPS : MAX_STEPS,
     });
   } catch (err) {
     u.notice("error", t("agent.internalError") + (process.env.FIRAS_DEBUG ? ` (${err?.message || err})` : ""));

@@ -31,6 +31,7 @@ import { clipLine } from "./screen.js";
 import { fitLogical, fitPathTail, ltrIsolate, stripBidiMarks } from "./textfit.js";
 import { isInside } from "../util/paths.js";
 import { NAME, NAME_AR } from "../brand.js";
+import { paintUltra } from "./ultra.js";
 
 const MARK_W = 6;
 const MAX_CARD = 84;
@@ -167,5 +168,5 @@ export function renderBanner({ width = 80, cwd, effort, mode, lang, version, res
   const w = Math.max(20, Math.floor(width) || 80);
   const o = { l, cwd: cwd || process.cwd(), effort, mode, version: String(version ?? "").replace(/^v/i, ""), resumed: !!resumed, date };
   const lines = withLang(l, () => (w < COMPACT_BELOW ? compact(o, w) : card(o, w)));
-  return ["", ...lines, ""];
+  return ["", ...lines.map(line => paintUltra(line)), ""];
 }

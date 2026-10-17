@@ -21,7 +21,16 @@ import fs from "node:fs";
 import { configFile, readJsonSafe, writePrivate } from "./util/paths.js";
 import { langFromLocale } from "./i18n/index.js";
 
-export const EFFORTS = Object.freeze(["off", "low", "medium", "high", "xhigh", "max"]);
+export const EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultracode"]);
+// Other spellings people type, and "off" from older settings files (the ladder now starts at low).
+const EFFORT_ALIASES = Object.freeze({ off: "low", none: "low", med: "medium", normal: "medium", "x-high": "xhigh", extra: "xhigh", maximum: "max", ultra: "ultracode", "ultra-code": "ultracode" });
+
+/** A level from EFFORTS for anything a person may type or an older file may hold; undefined when it is none of them. */
+export function normalizeEffort(value) {
+  const v = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const level = EFFORT_ALIASES[v] || v;
+  return EFFORTS.includes(level) ? level : undefined;
+}
 export const ARABIC_MODES = Object.freeze(["auto", "on", "off"]);
 export const PERSISTED_MODES = Object.freeze(["default", "acceptEdits", "plan"]);
 
@@ -38,7 +47,7 @@ const validators = {
   code: v => { const code = cleanCode(v); return CODE_SHAPE.test(code) ? code : undefined; },
   lang: v => (v === "ar" || v === "en" ? v : undefined),
   arabic: v => (ARABIC_MODES.includes(v) ? v : undefined),
-  effort: v => (EFFORTS.includes(v) ? v : undefined),
+  effort: v => normalizeEffort(v),
   mode: v => (PERSISTED_MODES.includes(v) ? v : undefined),
   origin: v => (typeof v === "string" && /^https?:\/\/\S{1,300}$/i.test(v.trim()) ? v.trim() : undefined),
 };

@@ -19,6 +19,7 @@ import { t, getLang } from "../i18n/index.js";
 import { arabicActive, hasRtl, layoutParagraph, stringWidth, stripAnsi, toVisual, wrapLogical } from "../text/display.js";
 import { renderDiff } from "./diff.js";
 import { fitPathTail, stripBidiMarks } from "./textfit.js";
+import { paintUltra } from "./ultra.js";
 import "./strings-app.js";
 
 export const GUTTER = "  ";
@@ -302,7 +303,7 @@ export function menuRows(items, selected, { width, multi = false, checked = new 
     const text = on ? c.bold(c.accent(labels[i])) : labels[i];
     // The mark after the number keeps it on the right of a label written in Latin letters too ("3." then "English").
     const logical = `${pointer} ${box}${number}${rtl ? RLM : ""} ${text}${hint}`;
-    return rtl ? toVisual(logical, { dir: "rtl", width: limit, align: "end" }) : toVisual(logical, { dir: "ltr" });
+    return paintUltra(rtl ? toVisual(logical, { dir: "rtl", width: limit, align: "end" }) : toVisual(logical, { dir: "ltr" }));
   });
 }
 

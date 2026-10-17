@@ -1,21 +1,20 @@
-// /effort [off|low|medium|high|xhigh|max]: how much the agent thinks before it answers. Saved for next time.
+// /effort [low|medium|high|xhigh|max|ultracode]: how much the agent thinks before it answers. Saved for next time.
+// Choosing ultracode plays its charge-up (src/ui/ultra.js) instead of the plain one-line confirmation.
 import { t } from "../i18n/index.js";
-import { EFFORTS } from "../config.js";
+import { EFFORTS, normalizeEffort } from "../config.js";
 import { chooseOption } from "./pick.js";
+import { playUltraIntro } from "../ui/ultra.js";
 import "../ui/strings-app.js";
-
-const ALIASES = { med: "medium", normal: "medium", none: "off", "x-high": "xhigh", extra: "xhigh", maximum: "max" };
 
 export const effortCommand = {
   name: "effort",
   aliases: [],
   group: "settings",
-  usage: "[off|low|medium|high|xhigh|max]",
+  usage: "[low|medium|high|xhigh|max|ultracode]",
   get description() { return t("app.cmd.effort"); },
   async run(ctx, args) {
-    let level = args.trim().toLowerCase();
-    level = ALIASES[level] || level;
-    if (!level) {
+    let level = args.trim() ? normalizeEffort(args) : "";
+    if (!args.trim()) {
       level = await chooseOption(ctx, {
         title: t("app.effort.title"),
         options: EFFORTS.map(value => ({ value, label: value, hint: t(`app.effort.hint.${value}`) })),
@@ -26,11 +25,15 @@ export const effortCommand = {
         return;
       }
     }
-    if (!EFFORTS.includes(level)) {
+    if (!level) {
       ctx.ui.notice("warn", t("app.effort.invalid", { value: args.trim(), list: EFFORTS.join(", ") }));
       return;
     }
     ctx.effort.set(level);
+    if (level === "ultracode" && typeof ctx.ui.print === "function") {
+      await playUltraIntro({ screen: ctx.screen, print: lines => ctx.ui.print(lines), lang: ctx.lang });
+      return;
+    }
     ctx.ui.notice("info", t("app.effort.set", { level }));
   },
 };

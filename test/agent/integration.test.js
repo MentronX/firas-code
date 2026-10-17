@@ -72,7 +72,7 @@ test("aborting mid-stream releases the connection and keeps a valid history", { 
     const ctl = new AbortController();
     const p = parts(client);
     p.ui = fakeUi({ onCall: name => { if (name === "textDelta") setTimeout(() => ctl.abort(), 5); } });
-    const result = await runUserTurn({ ...p, text: "go", effort: "off", lang: "en", system: "SYSTEM", signal: ctl.signal });
+    const result = await runUserTurn({ ...p, text: "go", effort: "low", lang: "en", system: "SYSTEM", signal: ctl.signal });
     assert.equal(result.stopReason, "aborted");
     assertValidHistory(p.session.messages);
     await new Promise(resolve => setTimeout(resolve, 100));

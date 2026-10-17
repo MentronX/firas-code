@@ -23,7 +23,7 @@ import { VERSION, NAME, NAME_AR, DEFAULT_ORIGIN } from "./brand.js";
 import { t, setLang, getLang, systemLang } from "./i18n/index.js";
 import { c, sym, refreshColorLevel, setColorLevel } from "./ui/theme.js";
 import { setArabicMode, stringWidth, toVisual } from "./text/display.js";
-import { loadConfig, updateConfig, cleanCode, EFFORTS } from "./config.js";
+import { loadConfig, updateConfig, cleanCode, EFFORTS, normalizeEffort } from "./config.js";
 import { createServiceClient } from "./link/client.js";
 import { isAbortError } from "./link/errors.js";
 import { createSession, loadSession, latestSession, listSessions } from "./agent/session.js";
@@ -47,9 +47,12 @@ import { runOnboarding, askAccessCode, rememberAccessCode } from "./onboarding.j
 import { runUpdate } from "./update.js";
 import { updateFailureText } from "./commands/update.js";
 import { resumeFlow } from "./commands/resume.js";
+import { shouldFixConsoleFont, fixConsoleFont, fontStillBroken } from "./ui/winfont.js";
+import { paintUltra, mentionsUltra } from "./ui/ultra.js";
 import "./ui/strings-app.js";
 
 const SESSION_ID = /^\d{8}(?:-\d{6}(?:-[0-9a-f]{1,6})?)?$/;
+const windowTitle = cwd => `${NAME} - ${path.basename(cwd) || cwd}`;
 const STDIN_LIMIT = 4 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -100,8 +103,9 @@ export function parseArgs(args) {
     }
   }
   if (opts.effort) {
-    opts.effort = opts.effort.toLowerCase();
-    if (!EFFORTS.includes(opts.effort)) return { error: { kind: "value", flag: "--effort", value: opts.effort, allowed: EFFORTS.join(" | ") } };
+    const level = normalizeEffort(opts.effort);
+    if (!level) return { error: { kind: "value", flag: "--effort", value: opts.effort.toLowerCase(), allowed: EFFORTS.join(" | ") } };
+    opts.effort = level;
   }
   if (opts.mode) {
     const mode = parseMode(opts.mode);
@@ -133,7 +137,7 @@ const HELP = {
     "  -c, --continue          continue the latest conversation in this folder",
     "  -r, --resume [id]       resume a saved conversation (no id: choose from a list)",
     "      --code <code>       save an access code and continue",
-    "      --effort <level>    off | low | medium | high | xhigh | max",
+    "      --effort <level>    low | medium | high | xhigh | max | ultracode",
     "      --mode <mode>       default | acceptEdits | plan | bypass",
     "      --yolo              skip permission prompts (dangerous actions still ask)",
     "      --lang <ar|en>      interface language",
@@ -157,7 +161,7 @@ const HELP = {
     "  -c, --continue          تابع آخر محادثة في هذا المجلد",
     "  -r, --resume [id]       استأنف محادثة محفوظة (بلا id: اختر من قائمة)",
     "      --code <code>       احفظ رمز الدخول وتابع",
-    "      --effort <level>    off | low | medium | high | xhigh | max",
+    "      --effort <level>    low | medium | high | xhigh | max | ultracode",
     "      --mode <mode>       default | acceptEdits | plan | bypass",
     "      --yolo              تخطَّ أسئلة الأذونات (الأفعال الخطرة تسأل دائماً)",
     "      --lang <ar|en>      لغة الواجهة",
@@ -327,7 +331,11 @@ async function run(args, io) {
     config.code = candidate;
   }
 
-  const shared = { opts, config, cwd, env, io, stdin, stdout, stderr, makeClient };
+  // The classic Windows console draws Arabic with the one font of its window; a font without Arabic letters is swapped
+  // for one with them, in the background (src/ui/winfont.js). Never in tests, where nothing global may change.
+  const fontFix = !io.injected && shouldFixConsoleFont({ env, stdout }) ? fixConsoleFont({ env, title: wantsPrint ? "" : windowTitle(cwd) }) : null;
+
+  const shared = { opts, config, cwd, env, io, stdin, stdout, stderr, makeClient, fontFix };
   return wantsPrint ? runPrint(shared) : runInteractive(shared);
 }
 
@@ -416,7 +424,7 @@ async function runPrint({ opts, config, cwd, env, io, stdin, stdout, stderr, mak
   proc?.on?.("SIGINT", onSignal);
   proc?.on?.("SIGTERM", onSignal);
   try {
-    const result = await runUserTurn({ session, text: prompt, ui, client, toolbox, permissions, effort: effortRef.value, signal: control.signal, lang: getLang(), config });
+    const result = await runUserTurn({ session, text: prompt, ui, client, toolbox, permissions, effort: mentionsUltra(prompt) ? "ultracode" : effortRef.value, signal: control.signal, lang: getLang(), config });
     ui.finish();
     session.save();
     return exitCodeFor(result.stopReason);
@@ -444,7 +452,8 @@ export function footerLine(permissions, effortRef, width = 80) {
   let shown = parts;
   while (shown.length > 1 && stringWidth(shown.join(sep)) > room) shown = shown.slice(0, -1);
   const styled = paint(fitLogical(shown[0], room, sym.ellipsis)) + (shown.length > 1 ? c.dim(sep + shown.slice(1).join(sep)) : "");
-  return toVisual(`  ${styled}`, getLang() === "ar" ? { dir: "rtl", width, align: "end" } : { dir: "ltr" });
+  // The isolates around Latin names have done their job once the line is ordered; a console font draws them as boxes.
+  return paintUltra(stripBidiMarks(toVisual(`  ${styled}`, getLang() === "ar" ? { dir: "rtl", width, align: "end" } : { dir: "ltr" })));
 }
 
 function recap(session, ui, width) {
@@ -460,7 +469,7 @@ function recap(session, ui, width) {
   }
 }
 
-async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stderr, makeClient }) {
+async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stderr, makeClient, fontFix }) {
   const proc = io.process || (io.injected ? null : process);
   const readPrompt = io.readPrompt || defaultReadPrompt;
   const screen = io.screen || createScreen({ stdin, stdout, env });
@@ -509,11 +518,18 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
       },
     });
     holdInput = screen.onKey(() => {});
+    // The helper renames the window while it runs: the title is put back, and a font that still cannot draw Arabic
+    // after the switch was tried is said once.
+    fontFix?.then(result => {
+      if (disposed) return;
+      screen.title?.(windowTitle(cwd));
+      if (fontStillBroken(result)) ui.notice("warn", t("app.font.broken"));
+    });
     // A quiet "busy, retrying in 2 s" while the client waits to try again.
     const retryNotice = info => ui.notice("info", retryText(info));
     client = withRetryNotice(makeClient(() => config.code), retryNotice);
 
-    screen.title?.(`${NAME} - ${path.basename(cwd) || cwd}`);
+    screen.title?.(windowTitle(cwd));
 
     const { session, resumed } = openSession({ opts, cwd, mode, notify: (level, text) => ui.notice(level, text), pickLater: true });
     app.session = session;
@@ -537,7 +553,7 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
         if (result.cancelled) requestExit(0);
         else requestExit(1);
       } else {
-        screen.title?.(`${NAME} - ${path.basename(cwd) || cwd}`);
+        screen.title?.(windowTitle(cwd));
       }
     }
 
@@ -561,7 +577,9 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
     const runAgentTurn = async text => {
       const control = beginTurn();
       try {
-        return await runUserTurn({ session: app.session, text, ui, client, toolbox, permissions, effort: app.effort.value, signal: control.signal, lang: getLang(), config });
+        // Naming ultracode in a message gives that one message the top level; the setting itself does not change.
+        const effort = mentionsUltra(text) ? "ultracode" : app.effort.value;
+        return await runUserTurn({ session: app.session, text, ui, client, toolbox, permissions, effort, signal: control.signal, lang: getLang(), config });
       } finally {
         endTurn();
         keep(app.session);

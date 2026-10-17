@@ -261,10 +261,10 @@ test("permission questions from parallel sub-agents are asked one at a time", as
       ? toolReply([{ id: "a1", name: "Agent", input: { description: "A", prompt: "task alpha" } }, { id: "a2", name: "Agent", input: { description: "B", prompt: "task beta" } }, { id: "a3", name: "Agent", input: { description: "C", prompt: "task gamma" } }])
       : textReply("done");
   });
-  const agent = createAgentTool({ client, ui, permissions, getEffort: () => "off", lang: "en" });
+  const agent = createAgentTool({ client, ui, permissions, getEffort: () => "low", lang: "en" });
   const toolbox = fakeToolbox([...buildTools(), agent]);
   const session = createSession({ cwd: process.cwd(), persist: false });
-  await runUserTurn({ session, text: "go", ui, client, toolbox, permissions, effort: "off", system: "MAIN" });
+  await runUserTurn({ session, text: "go", ui, client, toolbox, permissions, effort: "low", system: "MAIN" });
   assert.equal(peak, 1);
   assert.ok(permissions.checks.filter(c => c.depth === 1).length >= 3);
   assert.equal(session.messages[2].content.length, 3);

@@ -68,12 +68,12 @@ registerStrings("term", {
     "mode.acceptEdits": "accept edits",
     "mode.plan": "plan",
     "mode.bypass": "bypass",
-    "effort.off": "off",
     "effort.low": "low",
     "effort.medium": "medium",
     "effort.high": "high",
     "effort.xhigh": "extra high",
     "effort.max": "max",
+    "effort.ultracode": "ultracode",
   },
   ar: {
     "verb.waiting.1": "يبدأ العمل",
@@ -128,12 +128,13 @@ registerStrings("term", {
     "mode.acceptEdits": "قبول التعديلات",
     "mode.plan": "تخطيط",
     "mode.bypass": "تجاوز الأذونات",
-    "effort.off": "متوقف",
     "effort.low": "منخفض",
     "effort.medium": "متوسط",
     "effort.high": "مرتفع",
     "effort.xhigh": "مرتفع جدا",
     "effort.max": "الأقصى",
+    // A name, like the product's: kept in Latin letters in both languages, and painted in its rainbow (src/ui/ultra.js).
+    "effort.ultracode": L("ultracode"),
   },
 });
 
@@ -176,7 +177,7 @@ export function modeLabel(mode) {
   return lookup("mode", mode);
 }
 
-/** Effort name for display: "off" | "low" | "medium" | "high" | "xhigh" | "max". */
+/** Effort name for display: "low" | "medium" | "high" | "xhigh" | "max" | "ultracode". */
 export function effortLabel(effort) {
   return lookup("effort", effort);
 }

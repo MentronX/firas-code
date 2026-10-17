@@ -115,7 +115,8 @@ Summarize what changed in the last three commits.
 - `/help` يعرض المساعدة.
 - `/clear` يبدأ محادثة جديدة.
 - `/compact` يلخّص المحادثة الطويلة ليوفّر مساحة.
-- `/effort` يضبط مقدار تفكيره: `off` أو `low` أو `medium` أو `high` أو `xhigh` أو `max`.
+- `/effort` يضبط مقدار تفكيره: `low` أو `medium` أو `high` أو `xhigh` أو `max` أو `ultracode`.
+- `ultracode` أعلى مستوى: يرسل وكلاء فرعيين يستكشفون المهمة بالتوازي، ويكتب خطة مرتبة، ويفحص بعد كل خطوة، ثم يراجع التغيير مراجعتين مستقلتين. وإن كتبت كلمة `ultracode` داخل رسالة عملت تلك الرسالة وحدها بهذا المستوى.
 - `/mode` يغيّر وضع الأذونات.
 - `/lang` يغيّر لغة الواجهة.
 - `/arabic` يتحكم بعرض العربية: `auto` أو `on` أو `off`.
@@ -154,6 +155,7 @@ Summarize what changed in the last three commits.
 - الطرفيات لا تصل الحروف العربية ولا تعكس اتجاه السطر، فيقوم البرنامج بذلك بنفسه قبل الطباعة. لذلك لو نسخت نصاً من الشاشة بالفأرة لصق بترتيبه البصري المقلوب. استخدم `/copy` لنسخ النص بترتيبه الصحيح.
 - إن كانت طرفيتك تعالج العربية وحدها وظهر النص مزدوج الانعكاس، اكتب `/arabic off`. ولتعيده اكتب `/arabic on`. وهناك خيار التشغيل `--no-arabic` ومتغير البيئة `FIRAS_ARABIC=off`.
 - يكفي في الغالب خط الطرفية الافتراضي لأنها تستعين بخط النظام للحروف العربية. وإن ظهرت الحروف مفككة أو مربعات فجرّب خطاً فيه حروف عربية، مثل DejaVu Sans Mono أو Kawkab Mono.
+- في نافذة ويندوز القديمة (cmd أو PowerShell بدون Windows Terminal) لا يستعين الخط بغيره، فيبدّل البرنامج خط النافذة إلى Courier New تلقائياً إن لم يكن خطها يعرض العربية. التبديل للنافذة الحالية فقط ولا يُحفظ. ولإيقافه ضع متغير البيئة `FIRAS_FONT=keep`.
 
 ## حل المشكلات
 
@@ -308,7 +310,8 @@ Type `/` at the start of a message to see the list.
 - `/help` shows help.
 - `/clear` starts a fresh conversation.
 - `/compact` summarizes a long conversation to free up room.
-- `/effort` sets how hard it thinks: `off`, `low`, `medium`, `high`, `xhigh` or `max`.
+- `/effort` sets how hard it thinks: `low`, `medium`, `high`, `xhigh`, `max` or `ultracode`.
+- `ultracode` is the top level: sub-agents map the task in parallel, it writes a checklist plan, checks after every step, and has the change reviewed twice, independently. Writing the word `ultracode` in a message gives that one message the same treatment.
 - `/mode` changes the permission mode.
 - `/lang` changes the interface language.
 - `/arabic` controls Arabic display: `auto`, `on` or `off`.
@@ -347,6 +350,7 @@ There are four permission modes, switched with `Shift+Tab` or `/mode`:
 - Terminals do not join Arabic letters or reverse the direction of a line, so the program does both itself before printing. That means text you select with the mouse pastes in its visual, reversed order. Use `/copy` to copy text in the right order.
 - If your terminal already handles Arabic by itself and the text looks flipped twice, type `/arabic off`. Type `/arabic on` to switch it back. There is also the `--no-arabic` option and the `FIRAS_ARABIC=off` environment variable.
 - The default terminal font is usually fine because terminals borrow a system font for Arabic letters. If letters look broken or show as boxes, try a font that includes Arabic, such as DejaVu Sans Mono or Kawkab Mono.
+- The classic Windows console window (cmd or PowerShell without Windows Terminal) borrows no other font, so when its font cannot draw Arabic the program switches that window to Courier New by itself. Only the current window changes, and nothing is saved. Set `FIRAS_FONT=keep` to turn this off.
 
 ### Troubleshooting
 

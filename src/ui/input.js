@@ -39,6 +39,7 @@ import { t } from "../i18n/index.js";
 import { countText } from "./strings.js";
 import { clipLine } from "./screen.js";
 import { fitLogical, fitPathTail, stripBidiMarks } from "./textfit.js";
+import { paintUltra } from "./ultra.js";
 
 const CHIP0 = 0xe000;
 const CHIP_MAX = 256;
@@ -699,6 +700,8 @@ export function render(s, ctx, o = {}) {
     rows = rows.map((r, i) => (i === 0 ? r : fill + r.slice(pw)));
   }
   rows = paintChips(rows, view, s);
+  // The word that runs a message at ultracode lights up while it is typed (src/ui/ultra.js).
+  if (!ctx.mask) rows = rows.map(row => paintUltra(row));
 
   // At the end of text whose last letters are right-to-left the next letter appears on the LEFT of the run, so the
   // caret waits on the free cell there instead of covering the letter just typed.

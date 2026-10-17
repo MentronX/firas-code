@@ -68,19 +68,23 @@ test("a plain answer goes to stdout, nothing else goes anywhere, and the convers
   },
 }));
 
-test("--effort changes the next request: off sends no thinking fields, max asks for the long limit", () => session({
-  script: [textReply("a"), textReply("b"), textReply("c")],
+test("--effort changes the next request: an older 'off' means low, max asks for the long limit, ultracode adds its way of working", () => session({
+  script: [textReply("a"), textReply("b"), textReply("c"), textReply("d")],
   fn: async ({ service, run }) => {
     await run(["-p", "x", "--effort", "off"]);
     await run(["-p", "x", "--effort", "max"]);
     await run(["-p", "x", "--effort", "low"]);
-    const [off, max, low] = posts(service).map(r => r.body);
-    assert.equal("thinking" in off, false);
-    assert.equal("output_config" in off, false);
+    await run(["-p", "x", "--effort", "ultra"]);
+    const [off, max, low, ultra] = posts(service).map(r => r.body);
+    assert.deepEqual(off.output_config, { effort: "low" });
     assert.equal(off.max_tokens, 16000);
     assert.equal(max.max_tokens, 32000);
     assert.deepEqual(max.output_config, { effort: "max" });
+    assert.ok(!max.system.map(s => s.text).join("\n").includes("# Ultracode"));
     assert.deepEqual(low.output_config, { effort: "low" });
+    assert.deepEqual(ultra.output_config, { effort: "max" });
+    assert.equal(ultra.max_tokens, 32000);
+    assert.match(ultra.system.map(s => s.text).join("\n"), /# Ultracode/);
   },
 }));
 

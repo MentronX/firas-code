@@ -297,11 +297,11 @@ export function createInteractiveUi({
   // ---- the UI object ---------------------------------------------------------------------------------
 
   const ui = {
-    requestStart() {
+    requestStart(o) {
       if (state.stepHadTools) state.answerAcc = "";
       state.stepHadTools = false;
       state.liveChars = 0;
-      spinner.set({ phase: "waiting" });
+      spinner.set({ phase: "waiting", ultra: o?.effort === "ultracode" });
       updateTokens();
       schedule();
     },

@@ -1,6 +1,6 @@
 {
   "name": "firas-code",
-  "version": "2.0.0-trial.1",
+  "version": "2.0.0-trial.2",
   "description": "Firas Code 2 — وكيل برمجة يعمل داخل الطرفية",
   "type": "module",
   "bin": {

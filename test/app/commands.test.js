@@ -146,13 +146,13 @@ test("/effort sets, validates and offers a menu", async () => {
   const b = makeCtx();
   await dispatch("/effort turbo", b.ctx);
   assert.equal(b.calls.length, 0);
-  assert.match(b.notices[0][1], /turbo.*off, low, medium, high, xhigh, max/);
+  assert.match(b.notices[0][1], /turbo.*low, medium, high, xhigh, max, ultracode/);
 
-  const c = makeCtx({ pickIndex: 3 });
+  const c = makeCtx({ pickIndex: 2 });
   await dispatch("/effort", c.ctx);
   assert.equal(c.calls[0][0], "pick");
-  assert.equal(c.calls[0][1].items.length, 6);
-  assert.equal(c.calls[0][1].initial, 2, "the current level is preselected");
+  assert.deepEqual(c.calls[0][1].items.map(item => item.label.split(" ")[0]), ["low", "medium", "high", "xhigh", "max", "ultracode"], "from low up to ultracode");
+  assert.equal(c.calls[0][1].initial, 1, "the current level is preselected");
   assert.deepEqual(c.calls[1], ["effort", "high"]);
 
   const d = makeCtx({ pickIndex: -1 });
@@ -162,6 +162,23 @@ test("/effort sets, validates and offers a menu", async () => {
   const e = makeCtx();
   await dispatch("/effort MED", e.ctx);
   assert.deepEqual(e.calls, [["effort", "medium"]]);
+
+  const f = makeCtx();
+  await dispatch("/effort off", f.ctx);
+  assert.deepEqual(f.calls, [["effort", "low"]], "the old bottom of the ladder still answers");
+});
+
+test("/effort ultracode saves it and leaves its announcement instead of the one-line confirmation", async () => {
+  for (const spelling of ["ultracode", "ULTRA", "ultra-code"]) {
+    const a = makeCtx();
+    await dispatch(`/effort ${spelling}`, a.ctx);
+    assert.deepEqual(a.calls, [["effort", "ultracode"]], spelling);
+    assert.equal(a.notices.length, 0);
+    const text = a.printed.join("\n");
+    assert.match(text, /U L T R A C O D E/);
+    assert.match(text, /ultracode is on/);
+    assert.match(text, /Writing ultracode in a message/);
+  }
 });
 
 test("/mode understands names, spellings and the yolo alias", async () => {

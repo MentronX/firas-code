@@ -11,7 +11,7 @@ import { randomId, safeUi } from "./support.js";
 export const SUBAGENT_MAX_STEPS = 30;
 const NEVER_FOR_SUBAGENTS = new Set(["Agent", "AskUserQuestion", "ExitPlanMode", "TodoWrite"]);
 const EXPLORE_EXCLUDED = new Set(["UiLibrary"]);
-const EFFORT_ORDER = ["off", "low", "medium", "high", "xhigh", "max"];
+const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultracode"];
 
 const DESCRIPTION = `Launch a sub-agent to handle a task on its own and report back. It has its own conversation and tools; only its final message returns to you, so your context stays small.
 
@@ -40,8 +40,9 @@ const INPUT_SCHEMA = {
 };
 
 function clampEffort(effort, kind) {
+  // Ultracode is the main agent's way of working (it is the one that orchestrates); a worker gets the top level itself.
+  if (kind !== "explore") return effort === "ultracode" ? "max" : effort;
   // Searching rarely needs deep reasoning; keep explorers fast.
-  if (kind !== "explore") return effort;
   const cap = EFFORT_ORDER.indexOf("medium");
   const at = EFFORT_ORDER.indexOf(effort);
   return at > cap ? "medium" : effort;

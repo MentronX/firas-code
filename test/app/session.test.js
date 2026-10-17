@@ -152,23 +152,31 @@ test("an Arabic prompt goes out as typed and the streamed Arabic answer comes ba
   assert.equal(await app.finish(), 0);
 });
 
-test("/effort changes the next request body; /effort off removes the thinking fields", async () => {
-  const app = await start({ script: [textReply("one"), textReply("two"), textReply("three")] });
+test("/effort changes the next request body; ultracode announces itself and asks for the top level", async () => {
+  const app = await start({ script: [textReply("one"), textReply("two"), textReply("three"), textReply("four")] });
   await app.say("first");
   await app.saw("one");
   await app.say("/effort high");
   await app.saw("Effort set to high.");
   await app.say("second");
   await app.saw("two");
-  await app.say("/effort off");
-  await app.saw("Effort set to off.");
+  await app.say("/effort ultracode");
+  await app.saw("U L T R A C O D E");
+  await app.saw("two independent reviews");
   await app.say("third");
   await app.saw("three");
-  const [a, b, c] = app.posts().map(r => r.body);
+  await app.say("/effort low");
+  await app.saw("Effort set to low.");
+  await app.say("then ultracode please");
+  await app.saw("four");
+  const [a, b, c, d] = app.posts().map(r => r.body);
   assert.deepEqual(a.output_config, { effort: "medium" });
   assert.deepEqual(b.output_config, { effort: "high" });
-  assert.equal("thinking" in c, false);
-  assert.equal(loadConfig({ env: {} }).effort, "off", "remembered for next time");
+  assert.deepEqual(c.output_config, { effort: "max" });
+  assert.match(c.system.map(s => s.text).join("\n"), /# Ultracode/);
+  assert.deepEqual(d.output_config, { effort: "max" }, "naming ultracode in a message runs that message at ultracode");
+  assert.match(d.system.map(s => s.text).join("\n"), /# Ultracode/);
+  assert.equal(loadConfig({ env: {} }).effort, "low", "the setting itself is not changed by the word");
   assert.equal(await app.finish(), 0);
 });
 

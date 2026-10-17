@@ -15,7 +15,11 @@
 //    is left-aligned.
 //  - now() and the timer are injectable for tests; the timer is unref'd, so a forgotten spinner never keeps the
 //    process alive.
+//  - An ultracode turn (set({ ultra: true })) is the exception to "nothing else moves": the glyph and the verb cycle
+//    through the rainbow and a painted "ultracode" tag sits before the counters (src/ui/ultra.js). The verb is one colour
+//    at a time, so Arabic shaping is untouched; the tag is painted letter by letter on the finished line.
 import { c, sym, hasUnicode, colorLevel, fg, PALETTE } from "./theme.js";
+import { ULTRA, paintUltra, phaseAt, rainbowSolid } from "./ultra.js";
 import { stringWidth, toVisual } from "../text/display.js";
 import { t } from "../i18n/index.js";
 import { tList, withLang } from "./strings.js";
@@ -65,6 +69,7 @@ export function createSpinner({ onFrame = () => {}, lang = () => "en", now = Dat
   let label;
   let tokens = 0;
   let startedAt = 0;
+  let ultra = false;
 
   function schedule() {
     timer = setTimer(() => {
@@ -87,9 +92,15 @@ export function createSpinner({ onFrame = () => {}, lang = () => "en", now = Dat
     if ("label" in o) label = o.label ? String(o.label) : undefined;
     if (typeof o.tokens === "number" && Number.isFinite(o.tokens)) tokens = Math.max(0, o.tokens);
     if (typeof o.startedAt === "number" && Number.isFinite(o.startedAt)) startedAt = o.startedAt;
+    if ("ultra" in o) ultra = !!o.ultra;
   }
 
   function glyph(at) {
+    if (ultra && colorLevel()) {
+      const frames = sym.spinner;
+      const char = colorLevel() >= 2 ? sym.think : frames[Math.floor(Math.max(0, at - startedAt) / TICK_MS / 2) % frames.length];
+      return rainbowSolid(char, phaseAt(at));
+    }
     if (colorLevel() >= 2) {
       const k = 0.5 - 0.5 * Math.cos(((at % SHIMMER_MS) / SHIMMER_MS) * 2 * Math.PI);
       const low = lerp(PALETTE.accent, [0, 0, 0], 0.4);
@@ -124,15 +135,19 @@ export function createSpinner({ onFrame = () => {}, lang = () => "en", now = Dat
     const room = Math.max(1, width - markW - 1);
     let head = `${verb(at)}${sym.ellipsis}`;
     let tail = "";
+    const tag = ultra ? ` ${ULTRA}` : "";
     const withStats = stats.length ? ` ${stats[0]}` : "";
     const withHint = ` ${sym.dot} ${hint}`;
-    if (stringWidth(head + withStats + withHint) <= room) tail = c.dim(withStats + withHint);
-    else if (stringWidth(head + withStats) <= room) tail = c.dim(withStats);
+    if (stringWidth(head + tag + withStats + withHint) <= room) tail = tag + c.dim(withStats + withHint);
+    else if (stringWidth(head + tag + withStats) <= room) tail = tag + c.dim(withStats);
+    else if (tag && stringWidth(head + tag) <= room) tail = tag;
     else head = fitLogical(head, room, sym.ellipsis);
-    const plain = `${mark} ${c.accent(head)}${tail}`;
+    const paintHead = ultra && colorLevel() ? s => rainbowSolid(s, phaseAt(at) + 0.2) : c.accent;
+    const plain = `${mark} ${paintHead(head)}${tail}`;
     const out = toVisual(plain, l === "ar" ? { dir: "rtl", width, align: "end" } : { dir: "ltr" });
     const clean = stripBidiMarks(out);
-    return stringWidth(clean) > width ? clipLine(clean, width) : clean;
+    const fitted = stringWidth(clean) > width ? clipLine(clean, width) : clean;
+    return ultra ? paintUltra(fitted, phaseAt(at)) : fitted;
   }
 
   return {
@@ -142,6 +157,7 @@ export function createSpinner({ onFrame = () => {}, lang = () => "en", now = Dat
         phase = "waiting";
         label = undefined;
         tokens = 0;
+        ultra = false;
         startedAt = now();
         phaseSince = startedAt;
         set(o);

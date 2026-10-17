@@ -80,10 +80,11 @@ test("a full multi-step turn: text, tool_use, tool_result, final text", async ()
 });
 
 test("request fields follow the effort ladder", async () => {
-  assert.deepEqual(requestShape("off"), { max_tokens: 16000 });
   assert.deepEqual(requestShape("low"), { max_tokens: 16000, thinking: { type: "adaptive" }, output_config: { effort: "low" } });
+  assert.deepEqual(requestShape("off"), requestShape("low"), "an older 'off' is the bottom of the ladder now");
   assert.equal(requestShape("xhigh").max_tokens, 32000);
   assert.equal(requestShape("max").max_tokens, 32000);
+  assert.deepEqual(requestShape("ultracode"), { max_tokens: 32000, thinking: { type: "adaptive" }, output_config: { effort: "max" } }, "ultracode travels as the service's top level");
   assert.equal(requestShape("nonsense").output_config.effort, "medium");
 
   const on = setup({ script: [textReply("a")] });
@@ -97,14 +98,39 @@ test("request fields follow the effort ladder", async () => {
   assert.deepEqual(req.output_config, { effort: "high" });
   assert.equal(req.max_tokens, 16000);
 
-  const off = setup({ script: [textReply("a")] });
-  await run(off, "x", { effort: "off" });
-  assert.ok(!("thinking" in off.client.requests[0]));
-  assert.ok(!("output_config" in off.client.requests[0]));
+  const low = setup({ script: [textReply("a")] });
+  await run(low, "x", { effort: "low" });
+  assert.deepEqual(low.client.requests[0].output_config, { effort: "low" });
+  assert.deepEqual(low.client.requests[0].system, [{ type: "text", text: "SYSTEM PROMPT" }], "no ultracode text below the top level");
 
   const big = setup({ script: [textReply("a")] });
   await run(big, "x", { effort: "max" });
   assert.equal(big.client.requests[0].max_tokens, 32000);
+});
+
+test("an ultracode turn adds its way of working to the prompt and gets a larger step budget", async () => {
+  const env = setup({ script: [textReply("done")] });
+  await run(env, "x", { effort: "ultracode" });
+  const req = env.client.requests[0];
+  assert.deepEqual(req.output_config, { effort: "max" });
+  const system = req.system[0].text;
+  assert.ok(system.startsWith("SYSTEM PROMPT\n\n# Ultracode"), system.slice(0, 80));
+  assert.match(system, /Agent sub-agents in ONE message/);
+  assert.match(system, /TodoWrite/);
+
+  // A function prompt (the real one follows mid-turn changes) keeps working, with the note after it.
+  const fn = setup({ script: [textReply("ok")] });
+  await run(fn, "x", { effort: "ultracode", system: () => "LIVE" });
+  assert.ok(fn.client.requests[0].system[0].text.startsWith("LIVE\n\n# Ultracode"));
+
+  // 60 steps end an ordinary turn; an ultracode turn goes on.
+  const loopScript = n => Array.from({ length: n }, (_, i) => toolReply([{ id: `c${i}`, name: "Read", input: { path: `f${i}` } }]));
+  const plain = setup({ script: [...loopScript(MAX_STEPS + 5), textReply("end")] });
+  assert.equal((await run(plain, "x", { effort: "max" })).stopReason, "max_steps");
+  const ultra = setup({ script: [...loopScript(MAX_STEPS + 5), textReply("end")] });
+  const r = await run(ultra, "x", { effort: "ultracode" });
+  assert.equal(r.stopReason, "end_turn");
+  assert.equal(r.steps, MAX_STEPS + 6);
 });
 
 test("read-only tools run in parallel, others one at a time, results keep the original order", async () => {
