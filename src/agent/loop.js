@@ -5,18 +5,25 @@ import { MODEL_ID } from "../brand.js";
 import { t } from "../i18n/index.js";
 import "./strings.js";
 import { buildSystemPrompt, detectGit, formatDate, loadProjectInstructions, ULTRACODE_NOTE } from "./prompt.js";
+import { discoverSkills } from "../skills/index.js";
 import { estimateTokens, maybeCompact, pruneForRequest } from "./context.js";
-import { INTERRUPTED_RESULT, makeToolResult, repairMessages, sanitizeAssistantContent, textOf } from "./messages.js";
+import { INTERRUPTED_RESULT, contentBlocks, makeToolResult, repairMessages, sanitizeAssistantContent, textOf, toolResultsOf, toolUsesOf } from "./messages.js";
 import { ABORTED, abortGate, capHeadTail, firstLine, raceAbort, randomId, readUsage, safeUi } from "./support.js";
 
-export const MAX_STEPS = 60;
+export const MAX_STEPS = 100;
 // An ultracode turn maps, plans, builds, verifies and has its work reviewed: it gets room for all of it.
-export const ULTRA_MAX_STEPS = 150;
+export const ULTRA_MAX_STEPS = 200;
 export const MAX_CONTINUATIONS = 2;
+// A dropped stream is retried here, not only inside the link layer: after the first content event the
+// link layer stops retrying, and a long thinking turn would otherwise end with an error the person has
+// to retry by hand. Only a turn that has shown no text yet is retried, so nothing is duplicated.
+export const MAX_STREAM_RETRIES = 2;
 export const MAX_RESULT_CHARS = 100 * 1024;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const MAX_PARALLEL_TOOLS = 10;
 const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultracode"];
 const CONTINUE_TEXT = "Continue exactly where you stopped. Do not repeat what you already wrote.";
+const STEP_LIMIT_TEXT = "You have reached the step limit for this turn. Do not call any more tools. Summarize what you did and what remains, in the user's language.";
 
 /**
  * Effort level -> the request fields that carry it. Ultracode travels as the service's own top level ("max"): what
@@ -32,6 +39,25 @@ export function requestShape(effort) {
 function withUltracode(system) {
   if (typeof system === "function") return () => `${system()}\n\n${ULTRACODE_NOTE}`;
   return `${system}\n\n${ULTRACODE_NOTE}`;
+}
+
+/**
+ * The messages for the next request: pruneForRequest's, with every skill the Skill tool loaded put back whole. A skill
+ * is the instructions the rest of the work follows (32 KB at most, loaded once), not output read once: cut to a short
+ * stub it would stop applying halfway through the task, while the model, seeing it still there, would not load it again.
+ */
+function requestMessages(session) {
+  const pruned = pruneForRequest(session);
+  const skillCalls = new Set(session.messages.flatMap(m => (m.role === "assistant" ? toolUsesOf(m) : [])).filter(b => b.name === "Skill").map(b => b.id));
+  if (!skillCalls.size) return pruned;
+  const whole = new Map();
+  for (const m of session.messages) if (m.role === "user") for (const b of toolResultsOf(m)) if (skillCalls.has(b.tool_use_id)) whole.set(b.tool_use_id, b);
+  return pruned.map(m => {
+    if (m.role !== "user") return m;
+    const blocks = contentBlocks(m);
+    const back = b => (b?.type === "tool_result" && whole.has(b.tool_use_id) ? whole.get(b.tool_use_id) : b);
+    return blocks.some(b => back(b) !== b) ? { ...m, content: blocks.map(back) } : m;
+  });
 }
 
 function buildRequest({ system, tools, messages, effort }) {
@@ -438,6 +464,7 @@ export async function runAgentLoop(options) {
   if (!permissions || typeof permissions.check !== "function") throw new TypeError("runAgentLoop needs a permission engine");
   const ui = safeUi(options.ui);
   const signal = options.signal ?? new AbortController().signal;
+  const retryDelay = typeof options.retryDelayMs === "function" ? options.retryDelayMs : n => (n === 1 ? 1000 : 3000);
   const turn = options.turn ?? { permLock: Promise.resolve() };
   const fileState = options.fileState ?? toolbox.fileState ?? session.fileState;
   const toolDefs = toolbox.definitions();
@@ -446,6 +473,7 @@ export async function runAgentLoop(options) {
 
   let steps = 0;
   let continuations = 0;
+  let streamRetries = 0;
   let emptyRetried = false;
   let tooLargeRetried = false;
   let compactBlocked = false;
@@ -467,6 +495,19 @@ export async function runAgentLoop(options) {
       if (signal.aborted) { stopReason = "aborted"; break; }
       if (steps >= maxSteps) {
         ui.notice("warn", t("agent.maxSteps", { n: maxSteps }));
+        // A hard task that hits the ceiling still ends with words: ask for a closing summary with no tools.
+        try {
+          session.addUser(STEP_LIMIT_TEXT);
+          const closingRequest = buildRequest({ system: systemNow(), tools: [], messages: requestMessages(session), effort });
+          ui.requestStart({ step: steps, effort });
+          let closing;
+          try { closing = await streamOnce({ client, request: closingRequest, signal, ui }); } finally { ui.requestEnd(); }
+          const closingText = closing.blocks.filter(b => b.type === "text" && b.text.trim()).map(b => ({ type: "text", text: b.text }));
+          if (closingText.length) {
+            session.addAssistant({ content: closingText });
+            finalText += textOf({ content: closingText });
+          }
+        } catch { /* the closing answer is best effort */ }
         stopReason = "max_steps";
         break;
       }
@@ -478,7 +519,7 @@ export async function runAgentLoop(options) {
       }
 
       steps += 1;
-      const request = buildRequest({ system, tools: toolDefs, messages: pruneForRequest(session), effort });
+      const request = buildRequest({ system, tools: toolDefs, messages: requestMessages(session), effort });
       ui.requestStart({ step: steps, effort });
       let res;
       try { res = await streamOnce({ client, request, signal, ui }); } finally { ui.requestEnd(); }
@@ -493,12 +534,34 @@ export async function runAgentLoop(options) {
         ui.usage({ inputTokens: session.usage.inputTokens, outputTokens: session.usage.outputTokens, contextTokens: session.contextTokens });
       }
 
+      // A stream that broke before any text was shown is retried here: the link layer gives up after
+      // the first content event, and a long thinking turn must not end with a manual retry.
+      if (res.error && !res.aborted && res.error.retryable && streamRetries < MAX_STREAM_RETRIES &&
+          !res.blocks.some(b => b.type === "text" && b.text.trim())) {
+        streamRetries += 1;
+        steps -= 1; // a retry is not a new step
+        ui.notice("info", t("agent.retryingStream"));
+        await sleep(retryDelay(streamRetries));
+        if (signal.aborted) { stopReason = "aborted"; break; }
+        continue;
+      }
+
       if (res.aborted || res.error) {
         // Keep what the user already saw (text only); partial thinking and half-built tool calls are dropped.
         const partial = res.blocks.filter(b => b.type === "text" && b.text.trim()).map(b => ({ type: "text", text: b.text }));
         if (partial.length) session.addAssistant({ content: partial });
         save();
         if (res.aborted) { stopReason = "aborted"; break; }
+        // A retryable drop after text was shown: keep the text and ask the model to continue, instead of
+        // ending the turn with an error the person has to retry by hand.
+        if (res.error.retryable && partial.length && continuations < MAX_CONTINUATIONS) {
+          continuations += 1;
+          finalText += textOf({ content: partial });
+          session.addUser(CONTINUE_TEXT);
+          save();
+          ui.notice("info", t("agent.retryingStream"));
+          continue;
+        }
         const code = res.error.code;
         if (code === "request_too_large" && autoCompact && !tooLargeRetried) {
           tooLargeRetried = true;
@@ -537,6 +600,8 @@ export async function runAgentLoop(options) {
       }
 
       session.addAssistant({ content: stored });
+      // Save before the tools run: a long command or a crash must not lose the answer the person already saw.
+      save();
       const said = textOf({ content: stored });
 
       if (calls.length) {
@@ -578,11 +643,18 @@ export async function runAgentLoop(options) {
 // ---------------------------------------------------------------------------------------------------------
 // One user turn.
 
-/** Reads git state and project files once per turn; the returned function renders the prompt with the current mode. */
+/** The skills to list in the prompt: only when the toolbox can load them, and the same ones its Skill tool sees. */
+function promptSkills(toolbox, cwd, toolNames) {
+  if (!toolNames.includes("Skill")) return [];
+  try { return typeof toolbox.skills?.list === "function" ? toolbox.skills.list() : discoverSkills(cwd); } catch { return []; }
+}
+
+/** Reads git state, project files and skills once per turn; the returned function renders the prompt with the current mode. */
 async function composeSystem({ session, toolbox, permissions, lang, signal }) {
   const git = await detectGit(session.cwd, undefined, signal);
   const projectInstructions = loadProjectInstructions(session.cwd);
   const toolNames = (toolbox.tools || []).map(tool => tool.name);
+  const skills = promptSkills(toolbox, session.cwd, toolNames);
   const date = formatDate(new Date());
   return () => buildSystemPrompt({
     cwd: session.cwd,
@@ -594,6 +666,7 @@ async function composeSystem({ session, toolbox, permissions, lang, signal }) {
     git,
     mode: permissions.mode || session.mode || "default",
     toolNames,
+    skills,
   });
 }
 
@@ -602,7 +675,7 @@ async function composeSystem({ session, toolbox, permissions, lang, signal }) {
  * returning one) replaces the generated prompt; tests and callers that already built one use it.
  * Resolves with `{ stopReason, steps, usage }`; never rejects.
  */
-export async function runUserTurn({ session, text, ui, client, toolbox, permissions, effort, signal, lang = "en", config, system }) {
+export async function runUserTurn({ session, text, ui, client, toolbox, permissions, effort, signal, lang = "en", config, system, retryDelayMs }) {
   const u = safeUi(ui);
   const abortSignal = signal ?? new AbortController().signal;
   const startedAt = Date.now();
@@ -625,6 +698,7 @@ export async function runUserTurn({ session, text, ui, client, toolbox, permissi
       signal: abortSignal,
       system: ultra ? withUltracode(prompt) : prompt,
       maxSteps: ultra ? ULTRA_MAX_STEPS : MAX_STEPS,
+      retryDelayMs,
     });
   } catch (err) {
     u.notice("error", t("agent.internalError") + (process.env.FIRAS_DEBUG ? ` (${err?.message || err})` : ""));

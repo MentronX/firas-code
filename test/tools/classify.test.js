@@ -240,6 +240,16 @@ test("a link inside the project that leads out of it counts as outside", () => {
   } finally { p.cleanup(); outside.cleanup(); }
 });
 
+test("a link inside the project to a secret is not auto-allowed", () => {
+  const p = tmpProject({ ".env": "SECRET=1", "inside.txt": "x" });
+  try {
+    try { fs.symlinkSync(path.join(p.dir, ".env"), path.join(p.dir, "link"), "file"); }
+    catch { return; /* links cannot be made here */ }
+    assert.equal(classifyCommand("cat inside.txt", { cwd: p.dir }).risk, "readonly");
+    assert.equal(classifyCommand("cat link", { cwd: p.dir }).risk, "normal", "the resolved target is a secret");
+  } finally { p.cleanup(); }
+});
+
 test("empty and whitespace commands classify as read-only no-ops", () => {
   assert.equal(risk("").risk, "readonly");
   assert.equal(risk("   \n ").risk, "readonly");

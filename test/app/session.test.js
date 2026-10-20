@@ -81,7 +81,7 @@ test("start-up shows the banner and the prompt; /exit leaves cleanly and restore
   assert.ok(banner.includes(`v${VERSION}`));
   assert.ok(banner.includes(path.basename(app.work.dir)) || banner.includes("…"), "the folder is named");
   assert.match(banner, /effort: medium/);
-  assert.match(app.screen.liveText(), /default \(Shift\+Tab to switch\)|mode: default/);
+  assert.match(app.screen.liveText(), /default .* Shift\+Tab mode/);
   assert.ok(app.screen.titles.length >= 1);
   app.screen.type("/exit");
   app.screen.enter();
@@ -394,20 +394,20 @@ test("the prompt history survives a restart: Up brings the last message back", a
 test("Shift+Tab at the prompt cycles the permission mode and the footer follows", async () => {
   const app = await start();
   await app.ready();
-  assert.match(app.screen.liveText(), /mode: default/);
+  assert.match(app.screen.liveText(), /default .* Shift\+Tab mode/);
   app.screen.press("backtab", { shift: true });
-  await waitFor(() => /mode: accept edits/.test(app.screen.liveText()), { label: "accept edits" });
+  await waitFor(() => /accept edits .* Shift\+Tab mode/.test(app.screen.liveText()), { label: "accept edits" });
   app.screen.press("backtab", { shift: true });
-  await waitFor(() => /mode: plan/.test(app.screen.liveText()), { label: "plan" });
+  await waitFor(() => /plan .* Shift\+Tab mode/.test(app.screen.liveText()), { label: "plan" });
   assert.equal(await app.finish(), 0);
 });
 
 test("/mode bypass warns; --yolo starts in bypass", async () => {
   const app = await start({ args: ["--yolo"] });
   await app.ready();
-  assert.match(app.screen.liveText(), /mode: bypass/);
+  assert.match(app.screen.liveText(), /bypass .* Shift\+Tab mode/);
   await app.say("/mode default");
-  await waitFor(() => /mode: default/.test(app.screen.liveText()), { label: "default" });
+  await waitFor(() => /default .* Shift\+Tab mode/.test(app.screen.liveText()), { label: "default" });
   await app.say("/mode bypass");
   await app.saw(/Almost nothing will ask first/);
   assert.equal(await app.finish(), 0);
@@ -419,7 +419,7 @@ test("a plan is shown, approved, and the mode switches so work can begin", async
     script: [toolReply([{ name: "ExitPlanMode", input: { plan: "# Plan\n\n- change a.js" }, id: "call_plan" }]), textReply("Starting now.")],
   });
   await app.ready();
-  assert.match(app.screen.liveText(), /mode: plan/);
+  assert.match(app.screen.liveText(), /plan .* Shift\+Tab mode/);
   await app.say("plan it");
   await app.sawLive(/Start with this plan\?/);
   assert.match(app.screen.text(), /change a\.js/);
@@ -427,7 +427,7 @@ test("a plan is shown, approved, and the mode switches so work can begin", async
   app.screen.enter();
   await app.saw("Starting now.");
   await app.ready();
-  assert.match(app.screen.liveText(), /mode: accept edits/);
+  assert.match(app.screen.liveText(), /accept edits .* Shift\+Tab mode/);
   const result = app.posts()[1].body.messages.at(-1).content[0];
   assert.match(result.content, /approved the plan/);
   assert.equal(await app.finish(), 0);

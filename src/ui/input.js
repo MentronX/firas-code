@@ -7,7 +7,7 @@
 // src/text/display.js; cursor indexes in the state are LOGICAL UTF-16 indexes into state.text.
 //
 // Decisions:
-//  - The box is two dim rules (top and bottom) with the text between them: no side borders, so nothing can misalign
+//  - The box is two gray rules (top and bottom) with the text between them: no side borders, so nothing can misalign
 //    when a terminal draws an Arabic ligature one cell off, and copy/paste of the text stays clean. One row when empty.
 //    The prompt glyph (opts.prefix) is on the first row, other rows are indented by its width (or opts.continuationPrefix).
 //  - Rows of right-to-left text are right-aligned (layoutInput align "auto"): typing Arabic grows the line to the
@@ -15,7 +15,10 @@
 //    cover the letter just typed, so the terminal caret is parked on the free cell left of it (where the next letter
 //    will appear).
 //  - Enter submits; Enter with ctrl, alt or shift, and Ctrl+J, insert a newline (see keys.js: LF arrives as ctrl+return);
-//    a backslash right before the caret turns Enter into a newline too. Blank input is never submitted.
+//    a backslash right before the caret turns Enter into a newline too. Blank input is never submitted. (Alt+Enter is
+//    taken by the window in Windows Terminal and the classic console, so /help offers Ctrl+J and the backslash.)
+//  - The empty box shows a dim hint built from parts (strings-input.js). An Arabic hint is right-aligned and ends on the
+//    last cell, where typed Arabic ends too; the caret waits on that cell, the mirror of the English hint.
 //  - Large pastes (>= 3 lines or >= 200 characters) are stored aside and appear as ONE private-use character in
 //    state.text (U+E000 + n); the view swaps it for the chip "[pasted text · N lines]". The chip is atomic: arrows,
 //    Backspace and word jumps treat it as one character, and submit() expands it to the full text. Typed or pasted
@@ -25,6 +28,13 @@
 //    "/he" + Enter never runs something the user did not finish typing. File picker: an "@" that starts a word opens
 //    it; results come from opts.files(query), asked 80 ms after the last keystroke, stale answers are discarded. Enter
 //    and Tab insert "@path " (quoted when the path has spaces) and never submit. Esc closes a menu until the text changes.
+//  - The menu items may be the account's skills too ({ name, description, kind: "skill" }, after the commands): they
+//    filter and fill exactly like commands and carry a dim "skill" tag on the far side of their row.
+//  - Menu rows are laid out as COLUMNS measured over every matching item, not only the rows on screen, so the
+//    descriptions do not jump sideways while the list scrolls. Each column is ordered on its own (a name, a
+//    description, a tag), so an Arabic description can never pull the "/" of a name or a counter across the row. In the
+//    Arabic interface the rows are mirrored and right-aligned like the dialogs: pointer and name on the right, the
+//    description to their left, the tag and the scroll counter on the far (left) side.
 //  - Up/Down move between VISUAL rows keeping the column; at the first/last row they browse history (the draft is
 //    kept and comes back after the newest entry). With nothing more to browse they jump to the start/end of the text.
 //  - Words (Ctrl+Left/Right, Alt+Left/Right) are skipped in VISUAL direction like the arrows; Alt+B / Alt+F, Ctrl+W,
@@ -33,13 +43,14 @@
 //  - Ctrl+C with text clears it and shows "press Ctrl+C again to exit" for 2 s; with no text it exits. Esc clears too.
 //  - Secret mode (opts.mask): one mask glyph per code point, no history, menus, chips or backslash continuation, pasted
 //    newlines are dropped, nothing is trimmed.
-import { layoutInput, moveCursorVisual, stringWidth, stripAnsi, toVisual, hasRtl } from "../text/display.js";
+import { arabicActive, layoutInput, layoutParagraph, moveCursorVisual, stringWidth, stripAnsi, toVisual, hasRtl } from "../text/display.js";
 import { c, sym } from "./theme.js";
-import { t } from "../i18n/index.js";
+import { t, getLang } from "../i18n/index.js";
 import { countText } from "./strings.js";
 import { clipLine } from "./screen.js";
 import { fitLogical, fitPathTail, stripBidiMarks } from "./textfit.js";
 import { paintUltra } from "./ultra.js";
+import "./strings-input.js";
 
 const CHIP0 = 0xe000;
 const CHIP_MAX = 256;
@@ -61,6 +72,10 @@ function sanitize(s) {
   return String(s ?? "")
     .replace(/\r\n?/g, "\n")
     .replace(/\t/g, "  ")
+    // Whole escape sequences first: removing only the ESC byte left "[31m" / "[0m" as literal text
+    // when coloured output was pasted into the prompt.
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
     .replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "")
     .replace(CHIP_RE, "");
 }
@@ -245,7 +260,9 @@ function normCommands(list) {
     const name = String(cmd && cmd.name != null ? cmd.name : "").replace(/^\//, "");
     if (!name || seen.has(name)) continue;
     seen.add(name);
-    out.push({ name, description: String((cmd && cmd.description) || "") });
+    const item = { name, description: String((cmd && cmd.description) || "") };
+    if (cmd.kind === "skill") item.kind = "skill";
+    out.push(item);
   }
   return out;
 }
@@ -295,7 +312,7 @@ export function menuOf(s, ctx) {
   const token = tokenOf(s, ctx);
   if (!token) return null;
   const items = token.kind === "slash"
-    ? filterCommands(ctx.commands, token.query).map(x => ({ label: "/" + x.name, name: x.name, desc: x.description, exact: x.exact }))
+    ? filterCommands(ctx.commands, token.query).map(x => ({ label: "/" + x.name, name: x.name, desc: x.description, exact: x.exact, ...(x.kind ? { kind: x.kind } : {}) }))
     : ((s.files && s.files.items) || []).map(p => ({ label: p, path: p }));
   if (!items.length) return null;
   return { ...token, items, sel: Math.max(0, Math.min(s.sel, items.length - 1)) };
@@ -580,14 +597,37 @@ export function reduce(state, key, ctx) {
 // ---------------------------------------------------------------------------------------------
 // The view
 
+/** The Arabic interface mirrors the menus, the rule labels and the hints (typed text still decides its own direction). */
+const rtlUi = () => getLang() === "ar" && arabicActive();
+
+// What a menu row may show of a name or a description. A skill is written by a person, so its text is untrusted:
+// escape sequences, control characters and direction overrides go. So do the harakat: the text layer counts them as
+// zero cells but Windows Terminal gives each one a cell of its own, and a mirrored row is exactly as wide as the
+// terminal, so one mark would wrap it. Only what is SHOWN changes; the name that Tab fills in is untouched.
+const HARAKAT = /[\u064b-\u065f\u0670\u06d6-\u06dc\u06df-\u06e4\u06e7\u06e8\u06ea-\u06ed]/g;
+const menuText = s => stripAnsi(String(s ?? "")).replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e]/g, " ").replace(HARAKAT, "").replace(/\s+/g, " ").trim();
+
+/** One logical piece of a row, ordered on its own: nothing next to it can pull its characters across. */
+const piece = (text, dir = "auto") => stripBidiMarks(toVisual(text, { dir }));
+
+/**
+ * A description, ordered on its own as one paragraph: its direction comes from layoutParagraph's rule, as in the
+ * dialogs, not from its first letter, so an Arabic sentence that starts with a Latin word ("Git: ...") still reads
+ * from the name outwards. The text is one line that already fits its column.
+ */
+const sentencePiece = text => stripBidiMarks(layoutParagraph(text, Infinity, { align: "none" })[0] ?? "");
+
+/**
+ * A gray rule across the box; a label ("3 more above") sits dim near the far end: the right in English, the left in
+ * the Arabic interface.
+ */
 function ruleLine(width, label) {
   const bar = sym.hline;
-  if (!label) return c.gray(bar.repeat(width));
-  const text = stripBidiMarks(toVisual(label, { dir: "auto" }));
-  const room = width - 4;
-  const shown = stringWidth(text) > room ? clipLine(text, room) : text;
-  const left = Math.max(0, width - stringWidth(shown) - 4);
-  return c.gray(bar.repeat(left)) + " " + c.dim(shown) + " " + c.gray(bar.repeat(2));
+  if (!label || width < 8) return c.gray(bar.repeat(width));
+  const text = piece(fitLogical(label, width - 4, sym.ellipsis));
+  const long = c.gray(bar.repeat(Math.max(0, width - stringWidth(text) - 4)));
+  const mid = " " + c.dim(text) + " ";
+  return rtlUi() ? c.gray(bar.repeat(2)) + mid + long : long + mid + c.gray(bar.repeat(2));
 }
 
 /** The character drawn in terminal column `col` of a plain row ("" past the end). Marks ride on their base letter. */
@@ -607,36 +647,106 @@ function uiLine(text, width, style) {
   return stringWidth(plain) > width ? clipLine(plain, width) : plain;
 }
 
+/**
+ * The empty box's own hint (logical text, at most `room` cells). It is built from parts that are dropped from the end
+ * on a narrow terminal ("Type a message · / for commands and skills" before "Type a message"), never cut inside one. In the
+ * Arabic interface each part is isolated right to left, so a Latin "/" or "@" at its edge can never join the part
+ * beside it, and a part that starts with one ("@ for a file") still reads as an Arabic phrase.
+ */
+function placeholderText(room) {
+  const iso = rtlUi() ? p => "\u2067" + p + "\u2069" : p => p;
+  const parts = [t("term.input.ask"), t("term.input.askSlash"), t("term.input.askFile")].map(iso);
+  const sep = t("term.input.askSep");
+  let n = parts.length;
+  while (n > 1 && stringWidth(parts.slice(0, n).join(sep)) > room) n--;
+  return n > 1 ? parts.slice(0, n).join(sep) : fitLogical(parts[0], room, sym.ellipsis);
+}
+
+// Which optional columns a menu gets, best first: [description, skill tag, scroll counter]. The first one that fits the
+// width is used for every row, so the columns never move while the selection scrolls.
+const MENU_PLANS = [[1, 1, 1], [1, 1, 0], [1, 0, 1], [1, 0, 0], [0, 1, 1], [0, 1, 0], [0, 0, 1], [0, 0, 0]];
+const MIN_DESC = 6;
+// The far side of a row (tag, counter) stays within reach of the names on a very wide terminal, like the text column.
+const MENU_MAX = 100;
+
+/**
+ * The rows of the open menu, `rows` of them from menu.items starting at the scroll position. Every width is taken from
+ * ALL matching items (name column, description room, tag and counter columns), not from the rows on screen.
+ */
 function menuRows(menu, s, ctx, rows) {
-  const width = ctx.width;
-  const top = Math.max(0, Math.min(s.menuTop, menu.items.length - rows));
-  const shown = menu.items.slice(top, top + rows);
-  const nameCap = Math.max(8, Math.min(30, Math.floor(width / 2)));
-  const nameW = Math.min(nameCap, Math.max(...shown.map(it => stringWidth(it.label))));
-  return shown.map((it, k) => {
+  const rtl = rtlUi();
+  const width = Math.min(ctx.width, MENU_MAX);
+  // A mirrored menu is right-aligned: what a wide terminal has beyond the menu's width goes in front of every row.
+  const margin = rtl ? " ".repeat(ctx.width - width) : "";
+  const items = menu.items;
+  const slash = menu.kind === "slash";
+  const top = Math.max(0, Math.min(s.menuTop, items.length - rows));
+  const pointerW = stringWidth(sym.prompt);
+  const lead = pointerW + 1;
+
+  const labels = items.map(it => menuText(it.label));
+  const counterW = items.length > rows ? stringWidth(`${items.length}/${items.length}`) : 0;
+  const tag = piece(menuText(t("term.menu.skillTag")));
+  const tagW = slash && items.some(it => it.kind === "skill") ? stringWidth(tag) : 0;
+  const hasDesc = slash && items.some(it => menuText(it.desc));
+  // A command is a short word; a path is worth all the room the row has.
+  const cap = slash ? Math.max(8, Math.min(30, Math.floor(width / 2))) : Math.max(8, width - lead - (counterW ? counterW + 2 : 0));
+  const nameW = Math.max(1, Math.min(cap, width - lead, Math.max(1, ...labels.map(l => stringWidth(l)))));
+  const after = width - lead - nameW;
+
+  const trailOf = (withTag, withCount) => (withTag && withCount ? tagW + 2 + counterW : withTag ? tagW : withCount ? counterW : 0);
+  let plan = [0, 0, 0];
+  for (const p of MENU_PLANS) {
+    if ((p[0] && !hasDesc) || (p[1] && !tagW) || (p[2] && !counterW)) continue;
+    const trail = trailOf(p[1], p[2]);
+    const free = after - (trail ? trail + 2 : 0) - (p[0] ? 2 : 0);
+    if (free >= (p[0] ? MIN_DESC : 0)) { plan = p; break; }
+  }
+  const [withDesc, withTag, withCount] = plan;
+  const trail = trailOf(withTag, withCount);
+  const descRoom = withDesc ? after - 2 - (trail ? trail + 2 : 0) : 0;
+  // In a mirrored row the pointer is mirrored with it, as the dialogs draw it (where Unicode has a mirror image).
+  const pointer = c.accent(rtl ? piece("\u200f" + sym.prompt, "rtl") : sym.prompt);
+
+  return items.slice(top, top + rows).map((it, k) => {
     const index = top + k;
     const on = index === menu.sel;
-    const pointer = on ? c.accent(sym.prompt) + " " : "  ";
-    const label = menu.kind === "slash" ? fitLogical(it.label, nameW, sym.ellipsis) : fitPathTail(it.label, nameW, sym.ellipsis);
     let name;
-    if (menu.kind === "slash") {
-      name = on ? c.bold(c.accent(label)) : label;
+    let nameCells;
+    if (slash) {
+      const text = piece(fitLogical(labels[index], nameW, sym.ellipsis));
+      name = on ? c.bold(c.accent(text)) : text;
+      nameCells = stringWidth(text);
     } else {
-      const cut = Math.max(label.lastIndexOf("/"), label.lastIndexOf("\\")) + 1;
-      name = c.dim(label.slice(0, cut)) + (on ? c.bold(c.accent(label.slice(cut))) : label.slice(cut));
+      const path = fitPathTail(labels[index], nameW, sym.ellipsis);
+      const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1;
+      name = piece(c.dim(path.slice(0, cut)) + (on ? c.bold(c.accent(path.slice(cut))) : path.slice(cut)), "ltr");
+      nameCells = stringWidth(path);
     }
-    const pad = " ".repeat(Math.max(0, nameW - stringWidth(label)));
-    let tail = "";
-    if (menu.kind === "slash" && it.desc) {
-      const room = width - 2 - nameW - 2;
-      if (room >= 6) tail = "  " + c.dim(fitLogical(it.desc, room, sym.ellipsis));
+    const pad = " ".repeat(Math.max(0, nameW - nameCells));
+    const descText = withDesc ? sentencePiece(fitLogical(menuText(it.desc), descRoom, sym.ellipsis)) : "";
+    const desc = descText ? c.dim(descText) : "";
+    const descCells = descText ? stringWidth(descText) + 2 : 0;
+
+    const cells = [];
+    if (withTag) cells.push(it.kind === "skill" ? c.dim(tag) : " ".repeat(tagW));
+    if (withCount) {
+      const count = `${index + 1}/${items.length}`;
+      const gap = " ".repeat(counterW - stringWidth(count));
+      cells.push(on ? (rtl ? c.dim(count) + gap : gap + c.dim(count)) : " ".repeat(counterW));
     }
-    if (on && menu.items.length > rows) {
-      const count = `${index + 1}/${menu.items.length}`;
-      const used = stringWidth(pointer + name + pad + tail);
-      if (used + count.length + 1 < width) tail += " ".repeat(width - used - count.length) + c.dim(count);
+    const far = (rtl ? cells.reverse() : cells).join("  ");
+    const farCells = stripAnsi(far).trim() ? trail : 0;
+    const mark = on ? pointer : " ".repeat(pointerW);
+
+    if (rtl) {
+      const near = (desc ? desc + "  " : "") + pad + name + " " + mark;
+      const fill = " ".repeat(Math.max(0, width - farCells - descCells - nameW - lead));
+      return margin + clipLine((farCells ? far : "") + fill + near, width);
     }
-    return clipLine(stripBidiMarks(toVisual(pointer + name + pad + tail, { dir: "ltr" })), width);
+    const near = mark + " " + name + (desc || farCells ? pad : "") + (desc ? "  " + desc : "");
+    if (!farCells) return clipLine(near, width);
+    return clipLine(near + " ".repeat(Math.max(0, width - lead - nameW - descCells - farCells)) + far, width);
   });
 }
 
@@ -711,16 +821,19 @@ export function render(s, ctx, o = {}) {
   }
 
   if (!s.text && !ctx.mask && o.placeholder !== "" && o.placeholder !== false) {
-    const hint = o.placeholder || t("term.input.placeholder");
+    // One blank cell always separates the hint from the prompt glyph.
+    const room = Math.max(0, width - pw - 1);
+    const hint = o.placeholder ? fitLogical(String(o.placeholder), room, sym.ellipsis) : placeholderText(room);
     if (hasRtl(hint)) {
-      // An Arabic hint sits against the right edge like the text that will replace it, and the caret waits on the free
-      // cell at the very end, where the first letter will appear.
-      const room = Math.max(0, width - pw - 2);
-      rows = [prefix + c.dim(stripBidiMarks(toVisual(fitLogical(hint, room, sym.ellipsis), { dir: "rtl", width: Math.max(1, width - pw - 1), align: "end" })))];
+      // An Arabic hint ends on the last cell, exactly where typed Arabic ends (layoutInput right-aligns to the full
+      // width), and the caret waits on that cell, where the first letter will appear: the mirror image of the English
+      // hint, whose first letter the caret sits on.
+      // One cell stays free at the right edge for the caret, exactly as the English hint leaves the cell
+      // after the prompt glyph; filling it put the caret on top of the last letter.
+      rows = [prefix + c.dim(stripBidiMarks(toVisual(hint, { dir: "rtl", width: Math.max(1, width - pw - 1), align: "end" })))];
       caret = { row: 0, col: Math.max(pw, width - 1) };
     } else {
-      const room = Math.max(0, width - pw - 1);
-      rows = [prefix + c.dim(stripBidiMarks(toVisual(fitLogical(hint, room, sym.ellipsis), { dir: "ltr" })))];
+      rows = [prefix + c.dim(piece(hint, "ltr"))];
       caret = { row: 0, col: pw };
     }
   }

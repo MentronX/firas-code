@@ -2,6 +2,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../../src/brand.js";
@@ -120,7 +121,9 @@ test("a service refusal exits 1 with friendly words and no stack", async () => {
   } finally { await service.close(); }
 });
 
-test("`firas update` from a source checkout explains itself instead of running an installer", async () => {
+test("`firas update` from a source checkout explains itself instead of running an installer", async (t) => {
+  // An installed copy has no .git and is allowed to update; only a source checkout is refused.
+  if (!fs.existsSync(path.join(root, ".git"))) { t.skip("this copy is not a source checkout"); return; }
   const run = await firas(["update"]);
   assert.equal(run.code, 1);
   assert.match(run.stderr, /source checkout|know where to update from|another folder/);

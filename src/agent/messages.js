@@ -81,7 +81,10 @@ export function repairMessages(messages) {
   for (const raw of messages || []) {
     const m = normalized(raw);
     if (!m) { changed = true; continue; }
-    if (raw.content !== m.content && !Array.isArray(raw.content)) changed = true;
+    // normalized() drops blocks that are not objects with a type. When the content was an array, the
+    // dropped blocks are only visible as a shorter array; without this the caller kept the original
+    // message and the next request sent the invalid block (a null block is a 400 from the service).
+    if (!Array.isArray(raw.content) || raw.content.length !== m.content.length) changed = true;
     list.push(m);
   }
 

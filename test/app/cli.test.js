@@ -217,11 +217,11 @@ test("the footer under the prompt drops its hint, then its effort, instead of be
   const perms = { mode: "acceptEdits" };
   const effort = { value: "medium" };
   const plain = line => stripAnsi(line);
-  assert.equal(plain(footerLine(perms, effort, 80)), `  mode: accept edits ${sym.dot} effort: medium ${sym.dot} Shift+Tab to switch`);
+  assert.equal(plain(footerLine(perms, effort, 80)), `  accept edits ${sym.dot} effort: medium ${sym.dot} Shift+Tab mode`);
   const narrow = plain(footerLine(perms, effort, 50));
-  assert.ok(stringWidth(narrow) <= 48 && narrow.startsWith("  mode: accept edits"), narrow);
-  assert.ok(!narrow.includes("Shift+Tab to sw") || narrow.includes("Shift+Tab to switch"), "never cut mid-word: " + narrow);
-  assert.equal(plain(footerLine(perms, effort, 30)), "  mode: accept edits");
+  assert.ok(stringWidth(narrow) <= 48 && narrow.startsWith("  accept edits"), narrow);
+  assert.ok(!narrow.includes("Shift+Tab mo") || narrow.includes("Shift+Tab mode"), "never cut mid-word: " + narrow);
+  assert.equal(plain(footerLine(perms, effort, 30)), "  accept edits");
   assert.ok(stringWidth(plain(footerLine(perms, effort, 12))) <= 12);
   setLang("ar");
   try {

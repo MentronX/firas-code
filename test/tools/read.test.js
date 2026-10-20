@@ -111,6 +111,17 @@ test("UTF-16 files are decoded (with and without a BOM) and say so", async () =>
   } finally { s.cleanup(); }
 });
 
+test("a large UTF-16 file without a BOM is refused, not returned as NUL-interleaved garbage", async () => {
+  const s = setup();
+  try {
+    // Over MAX_TEXT_BYTES (12 MB), so the large-file path runs; no BOM, so only the NUL distribution can tell.
+    fs.writeFileSync(s.abs("big-utf16.txt"), Buffer.from("plain text line\n".repeat(400_000), "utf16le"));
+    const r = await s.call("Read", { path: "big-utf16.txt" });
+    assert.equal(r.ok, false);
+    assert.match(r.content, /very large UTF-16 file/);
+  } finally { s.cleanup(); }
+});
+
 test("Arabic content, Arabic names and spaces in paths", async () => {
   const s = setup({ "مجلد عربي/ملف 1.txt": "مرحبا بالعالم\nهذا سطر ثان\n" });
   try {

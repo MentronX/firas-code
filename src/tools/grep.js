@@ -283,6 +283,12 @@ async function collectJs({ root, isFile, matcher, mode, multiline, ignore, glob,
     async visit(rel, entry, isDir) {
       if (isDir) return true;
       if (!entry.isFile() && !entry.isSymbolicLink()) return true;
+      // A link can point outside the project or at a secret; reading it would bypass the permission
+      // question the path itself never triggers.
+      if (entry.isSymbolicLink()) {
+        const link = guardPath(rel, { cwd: root, platform: s.platform });
+        if (!link.ok || !link.inside || link.viaLink || isSecretPath(link.real, s.platform)) return true;
+      }
       if (stack?.isIgnored(rel, false)) return true;
       if (!wanted(rel)) return true;
       if (Date.now() > deadline) { stats.stopped = true; return false; }
@@ -366,8 +372,9 @@ export function createGrepTool() {
 
       const mode = input.output_mode || "files_with_matches";
       const context = toInt(input["-C"]) || 0;
-      const before = Math.min(50, toInt(input["-B"]) || context);
-      const after = Math.min(50, toInt(input["-A"]) || context);
+      // An explicit -B: 0 / -A: 0 means no context on that side; `|| context` treated it as absent.
+      const before = Math.min(50, input["-B"] !== undefined ? toInt(input["-B"]) : context);
+      const after = Math.min(50, input["-A"] !== undefined ? toInt(input["-A"]) : context);
       const showNumbers = input["-n"] !== false && input["-n"] !== "false";
       const limit = Math.min(GREP_HARD_LIMIT, Math.max(1, toInt(input.head_limit) || GREP_DEFAULT_LIMIT));
       const ignoreCase = input["-i"] === true || input["-i"] === "true";

@@ -22,7 +22,7 @@ import path from "node:path";
 import { VERSION, NAME, NAME_AR, DEFAULT_ORIGIN } from "./brand.js";
 import { t, setLang, getLang, systemLang } from "./i18n/index.js";
 import { c, sym, refreshColorLevel, setColorLevel } from "./ui/theme.js";
-import { setArabicMode, stringWidth, toVisual } from "./text/display.js";
+import { setArabicMode, toVisual } from "./text/display.js";
 import { loadConfig, updateConfig, cleanCode, EFFORTS, normalizeEffort } from "./config.js";
 import { createServiceClient } from "./link/client.js";
 import { isAbortError } from "./link/errors.js";
@@ -38,21 +38,37 @@ import { createInteractiveUi } from "./ui/interactive.js";
 import { createPlainUi } from "./ui/plain.js";
 import { loadHistory, appendHistory } from "./ui/history.js";
 import { createFileIndex } from "./ui/files.js";
-import { contentWidth, cleanText, vis } from "./ui/views.js";
-import { modeLabel, effortLabel } from "./ui/strings.js";
-import { fitLogical, stripBidiMarks } from "./ui/textfit.js";
-import { dispatch, commandMenu } from "./commands/index.js";
+import { contentWidth, cleanText, para } from "./ui/views.js";
+import { modeLabel } from "./ui/strings.js";
+import { stripBidiMarks } from "./ui/textfit.js";
+import { dispatch, commandMenu, isCommandName, parseSlash } from "./commands/index.js";
+import { createSkillSource, skillMessage } from "./skills/index.js";
 import { parseMode } from "./commands/mode.js";
 import { runOnboarding, askAccessCode, rememberAccessCode } from "./onboarding.js";
 import { runUpdate } from "./update.js";
 import { updateFailureText } from "./commands/update.js";
 import { resumeFlow } from "./commands/resume.js";
-import { shouldFixConsoleFont, fixConsoleFont, fontStillBroken } from "./ui/winfont.js";
-import { paintUltra, mentionsUltra } from "./ui/ultra.js";
+import { shouldFixConsoleFont, fixConsoleFont, fontStillBroken, isClassicConsole } from "./ui/winfont.js";
+import { mentionsUltra } from "./ui/ultra.js";
+import { footerLine } from "./ui/footer.js";
 import "./ui/strings-app.js";
+
+export { footerLine };
 
 const SESSION_ID = /^\d{8}(?:-\d{6}(?:-[0-9a-f]{1,6})?)?$/;
 const windowTitle = cwd => `${NAME} - ${path.basename(cwd) || cwd}`;
+
+/**
+ * The Arabic display mode to start with. The classic Windows console never reorders Arabic itself, so a SAVED "off"
+ * there (it only ever helps a terminal that does) would draw every Arabic line backwards; it is read as "auto". An
+ * explicit FIRAS_ARABIC=off (or --no-arabic, handled by the caller) is still obeyed.
+ */
+export function arabicSetting(config, { env = process.env, stdout = process.stdout, platform = process.platform, injected = false } = {}) {
+  const saved = config.arabic;
+  if (saved !== "off" || config.env?.arabic || injected) return saved;
+  return isClassicConsole({ platform, env, stdout }) ? "auto" : saved;
+}
+
 const STDIN_LIMIT = 4 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -152,25 +168,25 @@ const HELP = {
     `${NAME_AR} - وكيل برمجة داخل الطرفية`,
     "",
     "الاستخدام",
-    "  firas [خيارات] [رسالة]            ابدأ محادثة (تُرسَل الرسالة أولاً)",
-    "  firas -p \"رسالة\"                  نفّذ مرة واحدة واطبع الجواب ثم اخرج",
-    "  firas update                     ثبّت أحدث إصدار",
+    "  firas [خيارات] [رسالة]            ابدأ محادثة (ترسل الرسالة أولا)",
+    "  firas -p \"رسالة\"                  نفذ مرة واحدة واطبع الجواب ثم اخرج",
+    "  firas update                     ثبت أحدث إصدار",
     "",
     "الخيارات",
-    "  -p, --print [رسالة]     نفّذ مرة واحدة واطبع الجواب (المدخل المُمرَّر هو الرسالة)",
+    "  -p, --print [رسالة]     نفذ مرة واحدة واطبع الجواب (المدخل الممرر هو الرسالة)",
     "  -c, --continue          تابع آخر محادثة في هذا المجلد",
     "  -r, --resume [id]       استأنف محادثة محفوظة (بلا id: اختر من قائمة)",
     "      --code <code>       احفظ رمز الدخول وتابع",
     "      --effort <level>    low | medium | high | xhigh | max | ultracode",
     "      --mode <mode>       default | acceptEdits | plan | bypass",
-    "      --yolo              تخطَّ أسئلة الأذونات (الأفعال الخطرة تسأل دائماً)",
+    "      --yolo              تخط أسئلة الأذونات (الأفعال الخطرة تسأل دائما)",
     "      --lang <ar|en>      لغة الواجهة",
-    "      --no-arabic         لا تشكّل العربية ولا تعيد ترتيبها (لطرفية تفعل ذلك بنفسها)",
+    "      --no-arabic         لا تشكل العربية ولا تعيد ترتيبها (لطرفية تفعل ذلك بنفسها)",
     "      --no-color          بلا ألوان",
     "  -v, --version           اطبع رقم الإصدار",
     "  -h, --help              اعرض هذه المساعدة",
     "",
-    "رموز الخروج: 0 تمّ، 1 خطأ، 2 استخدام خاطئ، 130 مقاطَعة",
+    "رموز الخروج: 0 تم، 1 خطأ، 2 استخدام خاطئ، 130 مقاطعة",
   ],
 };
 
@@ -287,7 +303,7 @@ async function run(args, io) {
   const config = loadConfig({ env });
   const lang = opts.lang || config.lang || systemLang(env);
   setLang(lang);
-  setArabicMode(opts.noArabic ? "off" : config.arabic);
+  setArabicMode(opts.noArabic ? "off" : arabicSetting(config, { env, stdout, injected: io.injected }));
   if (opts.noColor) setColorLevel(0);
   else refreshColorLevel(env, stdout);
 
@@ -320,6 +336,8 @@ async function run(args, io) {
 
   // --code: validated, then saved, then the program carries on with it.
   if (opts.code) {
+    // The code is a bearer credential, and argv is readable by other local users on a shared machine.
+    writeLine(stderr, `${sym.warn} ${t("app.code.argvVisible")}`);
     const candidate = cleanCode(opts.code);
     try {
       await makeClient(() => candidate).checkAccess();
@@ -388,14 +406,31 @@ function openSession({ opts, cwd, mode, notify, pickLater = false }) {
   return { session: createSession({ cwd, mode }), resumed: false };
 }
 
-function buildEngine({ ui, client, config, session, cwd, mode, effortRef }) {
+/**
+ * The session's skills: one source for the folder, shared by the "/" menu, /name, /skills, the Skill tool and the
+ * system prompt, so all of them see the same list. It looks again every time it is asked (cheaply), so a skill added
+ * while the app runs shows up at the next prompt. A skill never takes a command's name.
+ */
+function skillSourceFor(cwd) {
+  return createSkillSource(cwd, { reserved: isCommandName });
+}
+
+function buildEngine({ ui, client, config, session, cwd, mode, effortRef, skills }) {
   const permissions = createPermissionEngine({ mode, cwd, ui, config });
   let toolbox = null;
   const base = () => ({ client, ui, permissions, toolbox: () => toolbox, getEffort: () => effortRef.value });
   // The tool is rebuilt per call so the sub-agent follows /lang and /effort made after start-up.
   const agentTool = { ...createAgentTool({ ...base(), lang: getLang() }), run: (input, ctx) => createAgentTool({ ...base(), lang: getLang() }).run(input, ctx) };
-  toolbox = createToolbox({ cwd, ui, client, config, session, mode, permissions, extraTools: [agentTool] });
+  toolbox = createToolbox({ cwd, ui, client, config, session, mode, permissions, extraTools: [agentTool], skills: skills || skillSourceFor(cwd) });
   return { permissions, toolbox };
+}
+
+/** "/name args" for an installed skill (and not a command) becomes the skill's message; anything else is unchanged. */
+function skillPrompt(text, skills) {
+  const parsed = parseSlash(text);
+  if (!parsed || isCommandName(parsed.name)) return text;
+  const skill = skills.find(parsed.name);
+  return skill ? skillMessage(skill, parsed.args) : text;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -413,10 +448,13 @@ async function runPrint({ opts, config, cwd, env, io, stdin, stdout, stderr, mak
 
   const mode = opts.yolo ? "bypass" : opts.mode || config.mode || "default";
   const effortRef = { value: opts.effort || config.effort || "medium" };
-  const ui = createPlainUi({ stdout, stderr, mode });
+  const ui = createPlainUi({ stdout, stderr, mode, env });
   const client = withRetryNotice(makeClient(() => config.code), info => ui.notice("info", retryText(info)));
   const { session } = openSession({ opts, cwd, mode, notify });
-  const { permissions, toolbox } = buildEngine({ ui, client, config, session, cwd, mode, effortRef });
+  const skills = skillSourceFor(cwd);
+  const { permissions, toolbox } = buildEngine({ ui, client, config, session, cwd, mode, effortRef, skills });
+  // `-p "/review"` runs the skill the same way typing /review does; commands do not exist in print mode.
+  const message = skillPrompt(prompt, skills);
 
   const control = new AbortController();
   const proc = io.process || (io.injected ? null : process);
@@ -424,7 +462,7 @@ async function runPrint({ opts, config, cwd, env, io, stdin, stdout, stderr, mak
   proc?.on?.("SIGINT", onSignal);
   proc?.on?.("SIGTERM", onSignal);
   try {
-    const result = await runUserTurn({ session, text: prompt, ui, client, toolbox, permissions, effort: mentionsUltra(prompt) ? "ultracode" : effortRef.value, signal: control.signal, lang: getLang(), config });
+    const result = await runUserTurn({ session, text: message, ui, client, toolbox, permissions, effort: mentionsUltra(prompt) ? "ultracode" : effortRef.value, signal: control.signal, lang: getLang(), config });
     ui.finish();
     session.save();
     return exitCodeFor(result.stopReason);
@@ -438,24 +476,6 @@ async function runPrint({ opts, config, cwd, env, io, stdin, stdout, stderr, mak
 // ---------------------------------------------------------------------------------------------------------------------
 // Interactive mode
 
-/**
- * The line under the prompt: mode, effort and the key that switches the mode. On a narrow terminal the parts go from the
- * end (the hint first) instead of being cut in the middle of a word; in the Arabic interface the line is right-aligned
- * like everything else, with the same two-column gutter as the English one.
- */
-export function footerLine(permissions, effortRef, width = 80) {
-  const mode = permissions.mode;
-  const paint = mode === "bypass" ? c.red : mode === "plan" ? c.accent : mode === "acceptEdits" ? c.yellow : c.dim;
-  const parts = [`${t("term.banner.mode")}: ${modeLabel(mode)}`, `${t("term.banner.effort")}: ${effortLabel(effortRef.value)}`, t("app.footer.cycle")];
-  const sep = ` ${sym.dot} `;
-  const room = Math.max(10, width - 4);
-  let shown = parts;
-  while (shown.length > 1 && stringWidth(shown.join(sep)) > room) shown = shown.slice(0, -1);
-  const styled = paint(fitLogical(shown[0], room, sym.ellipsis)) + (shown.length > 1 ? c.dim(sep + shown.slice(1).join(sep)) : "");
-  // The isolates around Latin names have done their job once the line is ordered; a console font draws them as boxes.
-  return paintUltra(stripBidiMarks(toVisual(`  ${styled}`, getLang() === "ar" ? { dir: "rtl", width, align: "end" } : { dir: "ltr" })));
-}
-
 function recap(session, ui, width) {
   const messages = session.messages;
   const user = [...messages].reverse().find(m => m.role === "user" && lastText(m) && !/^\[Summary of the earlier conversation/.test(lastText(m)));
@@ -465,7 +485,9 @@ function recap(session, ui, width) {
     if (user) ui.ensureBlank();
     const rows = renderMarkdown(cleanText(lastText(assistant)), { width: width + 2, dir: "auto", indent: "  " });
     const cap = 16;
-    ui.printText([...(rows.length > cap ? rows.slice(0, cap) : rows), ...(rows.length > cap ? ["  " + vis(c.dim(t("app.fold.more", { n: rows.length - cap })))] : []), ""]);
+    // The fold note is laid out to the full width like the rows above it, so in Arabic it ends at the same right edge.
+    const more = rows.length > cap ? para(c.dim(t("app.fold.more", { n: rows.length - cap })), width).map(r => "  " + r) : [];
+    ui.printText([...(rows.length > cap ? rows.slice(0, cap) : rows), ...more, ""]);
   }
 }
 
@@ -533,7 +555,8 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
 
     const { session, resumed } = openSession({ opts, cwd, mode, notify: (level, text) => ui.notice(level, text), pickLater: true });
     app.session = session;
-    const engine = buildEngine({ ui, client, config, session, cwd, mode, effortRef: app.effort });
+    const skills = skillSourceFor(cwd);
+    const engine = buildEngine({ ui, client, config, session, cwd, mode, effortRef: app.effort, skills });
     permissions = engine.permissions;
     toolbox = engine.toolbox;
 
@@ -590,8 +613,9 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
       get config() { return config; },
       get session() { return app.session; },
       get lang() { return getLang(); },
-      client, toolbox, permissions, ui, screen, cwd, env,
+      client, toolbox, permissions, ui, screen, cwd, env, skills,
       platform: io.platform || process.platform,
+      classicConsole: !io.injected && isClassicConsole({ env, stdout }),
       copyToClipboard: io.copyToClipboard,
       runUpdate: io.runUpdate,
       effort: {
@@ -622,6 +646,7 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
         permissions.reset();
         ui.resetUsage();
         ui.setLastAnswer("");
+        ui.resetTodos(null);
         // Scrolling the old text out of sight (not erasing it) keeps the terminal's own scrollback intact.
         if (typeof screen.clear === "function") screen.clear();
         else ui.printRaw(Array.from({ length: Math.max(1, screen.height()) }, () => ""));
@@ -634,6 +659,8 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
         toolbox.fileState.clear();
         ui.resetUsage(session.usage);
         ui.setLastAnswer("");
+        // The task list on screen belonged to the conversation that was left: the resumed one shows its own, or none.
+        ui.resetTodos(session.todos);
         ui.notice("info", t("app.resume.done", { title: session.title || session.id }));
         recap(session, ui, contentWidth(screen.width()));
       },
@@ -645,7 +672,8 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
       continuationPrefix: "  ",
       initial: ui.takeTypeAhead(),
       history,
-      commands: commandMenu(),
+      // Rebuilt for every prompt: the skills are looked up again, so a new SKILL.md is in the menu right away.
+      commands: commandMenu({ skills: skills.list() }),
       files: query => files.files(query),
       footer: () => [footerLine(permissions, app.effort, screen.width())],
       onShiftTab: () => { permissions.cycleMode(); app.session.mode = permissions.mode; },

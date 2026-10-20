@@ -1,4 +1,5 @@
-// Bilingual strings for the terminal widgets (spinner, banner, input editor), namespace "term".
+// Bilingual strings for the terminal widgets (spinner, banner, input editor, first-run language question), namespace
+// "term".
 //
 // Decisions:
 //  - Lists (spinner verbs, tips) are stored as numbered keys: "verb.thinking.1", "verb.thinking.2", ...; tList()
@@ -31,13 +32,15 @@ registerStrings("term", {
     "verb.tool.1": "Running",
     "verb.tool.2": "Carrying it out",
     "verb.tool.3": "Working on it",
-    "spinner.interrupt": "esc to interrupt",
+    "spinner.interrupt": "Esc to interrupt",
     "unit.s": "s",
     "unit.m": "m",
     "unit.h": "h",
 
     "input.exitHint": "Press Ctrl+C again to exit",
-    "input.placeholder": "Type a message · / for commands · @ for files",
+    // The prompt box builds its hint from the parts in strings-input.js; this whole sentence says the same, for any other
+    // caller that wants it in one piece.
+    "input.placeholder": "Type a message · / for commands and skills · @ for a file",
     "input.moreAbove": "{n} more above",
     "input.moreBelow": "{n} more below",
     "chip.label": "pasted text",
@@ -50,19 +53,31 @@ registerStrings("term", {
     "count.chars.few": "{n} chars",
     "count.chars.many": "{n} chars",
 
-    "banner.effort": "effort",
-    "banner.mode": "mode",
+    "banner.effort": "effort:",
+    "banner.mode": "mode:",
     "banner.resumed": "resumed session",
-    "banner.hint": "type / for commands",
-    "banner.tip": "Tip",
-    "tip.1": "Type / to see every command",
-    "tip.2": "Use @ to mention a file",
-    "tip.3": "Shift+Tab changes the permission mode",
-    "tip.4": "Esc stops the task in progress",
-    "tip.5": "Alt+Enter, or \\ then Enter, starts a new line",
-    "tip.6": "/effort sets how deeply I think",
+    "banner.hint": "type / for commands and skills, @ to add a file",
+    "banner.tip": "Tip:",
+    // The key line under the welcome card: what each key opens (the keys themselves are written in banner.js).
+    "banner.key.help": "commands",
+    "banner.key.effort": "effort",
+    "banner.key.mode": "mode",
+    "tip.1": "Type / for commands and skills, @ to add a file",
+    "tip.2": "/effort opens a picker: arrows choose, Tab jumps to ultracode",
+    "tip.3": "/skills lists your skills; each one runs from the / menu",
+    "tip.4": "Shift+Tab changes the permission mode",
+    "tip.5": "Esc stops the task in progress",
+    "tip.6": "Ctrl+J, or \\ then Enter, starts a new line",
     "tip.7": "/copy copies my last answer",
-    "tip.8": "/init writes a FIRAS.md for your project",
+    "tip.8": "type / for commands and skills",
+
+    // The first-run language question shows both languages at once, each read from its own table (onboarding.js).
+    "lang.title": "Language",
+    "lang.ask": "Choose your language",
+    "lang.ar": "Arabic",
+    "lang.en": "English",
+    "lang.type": "Type 1 or 2",
+    "lang.enter": "Enter to confirm",
 
     "mode.default": "default",
     "mode.acceptEdits": "accept edits",
@@ -97,7 +112,7 @@ registerStrings("term", {
     "unit.h": "س",
 
     "input.exitHint": `اضغط ${L("Ctrl+C")} مرة أخرى للخروج`,
-    "input.placeholder": `اكتب رسالتك · ${L("/")} للأوامر · ${L("@")} للملفات`,
+    "input.placeholder": `اكتب رسالتك · ${L("/")} للأوامر والمهارات · ${L("@")} لإضافة ملف`,
     "input.moreAbove": "{n} أخرى أعلاه",
     "input.moreBelow": "{n} أخرى أسفله",
     "chip.label": "نص ملصوق",
@@ -110,19 +125,29 @@ registerStrings("term", {
     "count.chars.few": "{n} أحرف",
     "count.chars.many": "{n} حرفا",
 
-    "banner.effort": "الجهد",
-    "banner.mode": "الوضع",
+    "banner.effort": "الجهد:",
+    "banner.mode": "الوضع:",
     "banner.resumed": "جلسة مستأنفة",
-    "banner.hint": `اكتب ${L("/")} لعرض الأوامر`,
-    "banner.tip": "نصيحة",
-    "tip.1": `اكتب ${L("/")} لعرض كل الأوامر`,
-    "tip.2": `استخدم ${L("@")} للإشارة إلى ملف`,
-    "tip.3": `${L("Shift+Tab")} يبدل وضع الأذونات`,
-    "tip.4": `${L("Esc")} يوقف المهمة الجارية`,
-    "tip.5": `${L("Alt+Enter")} أو ${L("\\")} ثم ${L("Enter")} لبدء سطر جديد`,
-    "tip.6": `الأمر ${L("/effort")} يضبط عمق التفكير`,
+    "banner.hint": `اكتب ${L("/")} للأوامر والمهارات، ${L("@")} لإضافة ملف`,
+    "banner.tip": "نصيحة:",
+    "banner.key.help": "لعرض الأوامر",
+    "banner.key.effort": "الجهد",
+    "banner.key.mode": "الوضع",
+    "tip.1": `اكتب ${L("/")} للأوامر والمهارات، ${L("@")} لإضافة ملف`,
+    "tip.2": `${L("/effort")} يفتح قائمة: اختر بالأسهم، و${L("Tab")} يقفز إلى ${L("ultracode")}`,
+    "tip.3": `${L("/skills")} يعرض مهاراتك، وكل مهارة تعمل من قائمة ${L("/")}`,
+    "tip.4": `${L("Shift+Tab")} يبدل وضع الأذونات`,
+    "tip.5": `${L("Esc")} يوقف المهمة الجارية`,
+    "tip.6": `${L("Ctrl+J")} أو ${L("\\")} ثم ${L("Enter")} لبدء سطر جديد`,
     "tip.7": `الأمر ${L("/copy")} ينسخ آخر إجابة`,
-    "tip.8": `الأمر ${L("/init")} ينشئ ملف ${L("FIRAS.md")} لمشروعك`,
+    "tip.8": `اكتب ${L("/")} للأوامر والمهارات`,
+
+    "lang.title": "اللغة",
+    "lang.ask": "اختر اللغة",
+    "lang.ar": "العربية",
+    "lang.en": "الإنجليزية",
+    "lang.type": "اكتب 1 أو 2",
+    "lang.enter": `${L("Enter")} للتأكيد`,
 
     "mode.default": "عادي",
     "mode.acceptEdits": "قبول التعديلات",
@@ -185,6 +210,7 @@ export function effortLabel(effort) {
 /** "12 lines" / "سطران" ... the grammatical form for a count. kind: "lines" | "chars". */
 export function countText(kind, n) {
   const r = n % 100;
-  const form = n === 1 ? "one" : n === 2 ? "two" : r >= 3 && r <= 10 ? "few" : "many";
+  // Arabic counts by the last two digits: 101 is "one", 102 is "two", 103-110 are "few", 111+ is "many".
+  const form = r === 1 ? "one" : r === 2 ? "two" : r >= 3 && r <= 10 ? "few" : "many";
   return t(`term.count.${kind}.${form}`, { n });
 }

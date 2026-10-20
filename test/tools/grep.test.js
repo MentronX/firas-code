@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { setup } from "./helpers.js";
+import path from "node:path";
+import { setup, tmpProject } from "./helpers.js";
 import { findExecutable } from "../../src/tools/walk.js";
 
 const haveRg = !!findExecutable("rg");
@@ -78,6 +79,24 @@ scenario("context lines use '-' and groups are separated by --", { "f.txt": "a1\
   assert.deepEqual(out(before), ["f.txt-7-f7", "f.txt:8:MATCH two"]);
   const joined = await s.call("Grep", { pattern: "MATCH", output_mode: "content", "-C": 3 });
   assert.ok(!out(joined).includes("--"), "overlapping context makes one group");
+});
+
+scenario("an explicit -B: 0 or -A: 0 means no context on that side", { "f.txt": "a1\nb2\nMATCH one\nc4\nd5\n" }, async s => {
+  const noBefore = await s.call("Grep", { pattern: "MATCH", output_mode: "content", "-C": 2, "-B": 0 });
+  assert.deepEqual(out(noBefore), ["f.txt:3:MATCH one", "f.txt-4-c4", "f.txt-5-d5"]);
+  const noAfter = await s.call("Grep", { pattern: "MATCH", output_mode: "content", "-C": 2, "-A": 0 });
+  assert.deepEqual(out(noAfter), ["f.txt-1-a1", "f.txt-2-b2", "f.txt:3:MATCH one"]);
+});
+
+test("Grep does not follow a link to a file outside the project", async () => {
+  const outside = tmpProject({ "secret.txt": "OUTSIDE-SECRET\n" });
+  const s = setup({ "inside.txt": "inside\n" });
+  try {
+    try { fs.symlinkSync(path.join(outside.dir, "secret.txt"), s.abs("link.txt"), "file"); }
+    catch { return; /* links cannot be made here */ }
+    const r = await s.call("Grep", { pattern: "OUTSIDE-SECRET", output_mode: "content" });
+    assert.match(r.content, /No matches/, r.content);
+  } finally { s.cleanup(); outside.cleanup(); }
 });
 
 scenario("glob and type filters", SRC, async s => {

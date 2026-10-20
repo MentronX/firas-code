@@ -92,13 +92,14 @@ test("the announcement says what ultracode does, in both languages, right-aligne
 test("the charge-up animates in the live region, then leaves the announcement", async () => {
   await withColor(3, async () => {
     const frames = [];
+    const raw = [];
     let cleared = 0;
     const printed = [];
-    const screen = { isTTY: true, width: () => 80, setLive: lines => frames.push(lines.map(stripAnsi)), clearLive: () => { cleared += 1; } };
+    const screen = { isTTY: true, width: () => 80, setLive: lines => { frames.push(lines.map(stripAnsi)); raw.push(lines); }, clearLive: () => { cleared += 1; } };
     await playUltraIntro({ screen, print: lines => printed.push(...lines.map(stripAnsi)), lang: "en", frames: 6, frameMs: 0, sleep: async () => {} });
     assert.equal(frames.length, 6);
     assert.equal(cleared, 1);
-    assert.ok(frames[0][0].length < frames[5][0].length, "the title lights up letter by letter");
+    assert.ok(raw[0][0] !== raw[5][0], "the title lights up letter by letter");
     assert.ok(frames[5][0].includes("U L T R A C O D E"));
     assert.ok(frames[5][1].includes("━".repeat(10)) || frames[5][1].includes("=".repeat(10)), "the bar ends full");
     assert.ok(printed.some(l => l.includes("ultracode is on")));

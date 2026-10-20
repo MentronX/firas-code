@@ -391,6 +391,17 @@ function isSystemLike(word, env) {
   try { return isSystemPath(native.windows ? native.text.replace(/\//g, "\\") : native.text, { platform: native.windows ? "win32" : "linux", env }); } catch { return false; }
 }
 
+/** The path a target really names, following links; the raw path when it cannot be resolved. */
+function resolvedTarget(raw, ctx) {
+  try {
+    const g = guardPath(raw, { cwd: ctx.cwd, platform: ctx.platform });
+    return g && g.ok ? g.real : raw;
+  } catch { return raw; }
+}
+
+/** A system target as written OR as its link resolves: a junction named "build" can point at C:\Windows. */
+const systemLike = (raw, ctx) => isSystemLike(raw, ctx.env) || isSystemLike(resolvedTarget(raw, ctx), ctx.env);
+
 const NULL_TARGETS = new Set(["/dev/null", "nul", "$null", "/dev/stdout", "/dev/stderr", "/dev/stdin", "/dev/tty"]);
 
 // ---------------------------------------------------------------------------------------------------
@@ -577,7 +588,7 @@ function secretWord(w, platform, { globs = false } = {}) {
   return isSecretPath(word, platform);
 }
 
-function deletionJudge(base, args, res, env, kind) {
+function deletionJudge(base, args, res, env, kind, ctx) {
   const targets = [];
   let recursive = false, force = false, noPreserve = false;
   const cmdStyle = base === "del" || base === "erase" || base === "rd" || (base === "rmdir" && kind === "cmd");
@@ -600,10 +611,11 @@ function deletionJudge(base, args, res, env, kind) {
   }
   const wild = targets.some(t => /^(\.\/)?\*(\.\*)?$/.test(t));
   const registry = targets.some(t => /^(hklm|hkcu|hkcr|hku|registry::)/i.test(t));
-  const dangerous = targets.some(t => isDangerousTarget(t, { env }));
+  // A link inside the project can name a drive root or a system folder; judge the resolved target too.
+  const dangerous = targets.some(t => isDangerousTarget(t, { env }) || isDangerousTarget(resolvedTarget(t, ctx), { env }));
   if (noPreserve || registry || (dangerous && (recursive || force || wild || base === "rimraf"))) raise(res, 2, registry ? "registry" : "recursiveDelete", { forget: true });
   else raise(res, 1, "");
-  if (targets.some(t => isSystemLike(t, env))) raise(res, 2, "systemWrite", { forget: true });
+  if (targets.some(t => systemLike(t, ctx))) raise(res, 2, "systemWrite", { forget: true });
 }
 
 function judgeGit(args, res) {
@@ -787,7 +799,7 @@ function judgeWords(input, ctx, depth) {
     const of = args.find(a => /^of=/i.test(a));
     if (of && /^of=(\/dev\/|\\\\\.\\|\/\/\.\/)/i.test(of)) raise(res, 2, "diskTool", { forget: true });
     else raise(res, 1, "");
-    if (of && isSystemLike(of.slice(3), env)) raise(res, 2, "systemWrite", { forget: true });
+    if (of && systemLike(of.slice(3), ctx)) raise(res, 2, "systemWrite", { forget: true });
   }
   if (base === "reg") {
     const sub = lowerArgs[0];
@@ -802,12 +814,15 @@ function judgeWords(input, ctx, depth) {
     if (recursive && args.some(a => !isFlag(a) && isDangerousTarget(a, { env, cwdGlobs: false }))) raise(res, 2, "permissions", { forget: true });
     else raise(res, 1, "");
   }
-  if (DELETERS.has(base)) deletionJudge(base, args, res, env, kind);
-  if (WRITERS.has(base) && args.some(a => !isFlag(a) && isSystemLike(a, env))) raise(res, 2, "systemWrite", { forget: true });
+  if (DELETERS.has(base)) deletionJudge(base, args, res, env, kind, ctx);
+  if (WRITERS.has(base) && args.some(a => !isFlag(a) && systemLike(a, ctx))) raise(res, 2, "systemWrite", { forget: true });
   const sedInPlace = base === "sed" && args.some(a => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place"));
-  if (sedInPlace && args.some(a => isSystemLike(a, env))) raise(res, 2, "systemWrite", { forget: true });
+  if (sedInPlace && args.some(a => systemLike(a, ctx))) raise(res, 2, "systemWrite", { forget: true });
   // Hooks and settings under .git are run by git later; a command that writes there is never routine.
-  if ((WRITERS.has(base) || sedInPlace || base === "dd") && args.some(a => isGitInternal(a.replace(/^of=/i, "")))) raise(res, 2, "gitInternal", { forget: true });
+  if ((WRITERS.has(base) || sedInPlace || base === "dd") && args.some(a => {
+    const t = a.replace(/^of=/i, "");
+    return isGitInternal(t) || isGitInternal(resolvedTarget(t, ctx));
+  })) raise(res, 2, "gitInternal", { forget: true });
 
   if (res.level >= 2) return res;
 
@@ -920,7 +935,7 @@ function classifyInternal(text, ctx, depth) {
       if (secretWord(target, ctx.platform)) { res.secret = true; raise(res, 2, "secret", { forget: true }); }
       if (r.op.includes(">") && !NULL_TARGETS.has(target.toLowerCase())) {
         raise(res, 1, "", { forget: true });
-        if (isSystemLike(target, ctx.env) || /^\/dev\/(sd|nvme|hd|disk|mmcblk)/i.test(target)) raise(res, 2, "systemWrite", { forget: true });
+        if (systemLike(target, ctx) || /^\/dev\/(sd|nvme|hd|disk|mmcblk)/i.test(target)) raise(res, 2, "systemWrite", { forget: true });
         if (isGitInternal(target)) raise(res, 2, "gitInternal", { forget: true });
       }
     }
@@ -995,7 +1010,11 @@ function safeProjectPath(arg, ctx) {
   if (/(^|\/)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.[^/]*)?(\/|$)/i.test(arg) || /[. ]$/.test(arg)) return false;
   if (isSecretPath(arg, ctx.platform)) return false;
   const guard = guardPath(arg, { cwd: ctx.cwd, platform: ctx.platform });
-  return !!(guard && guard.ok && guard.inside && !guard.viaLink && !isSecretPath(guard.abs, ctx.platform) && !isSystemPath(guard.abs, { platform: ctx.platform, env: ctx.env }));
+  // Check the resolved target too: a link inside the project can point at a secret or a system folder
+  // while its own name looks ordinary.
+  return !!(guard && guard.ok && guard.inside && !guard.viaLink &&
+    !isSecretPath(guard.abs, ctx.platform) && !isSecretPath(guard.real, ctx.platform) &&
+    !isSystemPath(guard.abs, { platform: ctx.platform, env: ctx.env }) && !isSystemPath(guard.real, { platform: ctx.platform, env: ctx.env }));
 }
 
 const numeric = word => /^\d{1,6}$/.test(word || "");

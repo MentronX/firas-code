@@ -7,8 +7,10 @@
 // chunking, as long as the width does not change in between (a width change only affects lines not yet committed).
 //
 // Decisions:
-//  - A growing paragraph line releases its finished rows early (see earlyPara in markdown.js); headings, list items,
-//    quote lines and table rows wait for their source line; code lines are released one by one; tables wait for their end.
+//  - A growing paragraph line releases its finished rows early (see earlyPara in markdown.js), each one once the text
+//    that decides the direction of its edges is in (a row ending in "&&" waits for the next strong letter); headings,
+//    list items, quote lines and table rows wait for their source line; code lines are released one by one; tables wait
+//    for their end, and meanwhile their last rows show as dim source in the partial, cut to the width (markdown.js rawRow).
 //  - finish() flushes everything, including an unterminated fence, and clears the partial. reset() starts a new
 //    document (blank-line bookkeeping included); after finish() without reset() the stream continues the document.
 import { createEngine, splitLines } from "./markdown.js";

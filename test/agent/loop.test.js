@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runUserTurn, requestShape, checkInput, MAX_STEPS, MAX_RESULT_CHARS } from "../../src/agent/loop.js";
+import { FirasLinkError } from "../../src/link/errors.js";
 import { createSession } from "../../src/agent/session.js";
 import { t, setLang } from "../../src/i18n/index.js";
 import {
@@ -123,7 +124,7 @@ test("an ultracode turn adds its way of working to the prompt and gets a larger 
   await run(fn, "x", { effort: "ultracode", system: () => "LIVE" });
   assert.ok(fn.client.requests[0].system[0].text.startsWith("LIVE\n\n# Ultracode"));
 
-  // 60 steps end an ordinary turn; an ultracode turn goes on.
+  // 100 steps end an ordinary turn; an ultracode turn goes on.
   const loopScript = n => Array.from({ length: n }, (_, i) => toolReply([{ id: `c${i}`, name: "Read", input: { path: `f${i}` } }]));
   const plain = setup({ script: [...loopScript(MAX_STEPS + 5), textReply("end")] });
   assert.equal((await run(plain, "x", { effort: "max" })).stopReason, "max_steps");
@@ -446,16 +447,19 @@ test("an empty response is retried once", async () => {
   assert.ok(thinkingOnly.session.messages.every(m => !m.content.some(b => b.type === "thinking" && m.role === "assistant" && m.content.length === 1)));
 });
 
-test("the 60 step ceiling stops a runaway turn with a clear notice and a valid history", async () => {
-  const env = setup({ script: (request, n) => toolReply([{ id: `loop_${n}`, name: "Read", input: { path: `f${n}` } }]) });
+test("the 100 step ceiling stops a runaway turn with a clear notice and a valid history", async () => {
+  const env = setup({ script: (request, n) => (n < 100
+    ? toolReply([{ id: `loop_${n}`, name: "Read", input: { path: `f${n}` } }])
+    : textReply("Here is where I stopped.")) });
   const result = await run(env, "never ends");
-  assert.equal(MAX_STEPS, 60);
+  assert.equal(MAX_STEPS, 100);
   assert.equal(result.stopReason, "max_steps");
-  assert.equal(result.steps, 60);
-  assert.equal(env.client.calls, 60);
+  assert.equal(result.steps, 100);
+  assert.equal(env.client.calls, 101, "the closing summary request is the 101st call");
   assertValidHistory(env.session.messages);
-  assert.equal(env.session.messages.length, 121);
-  assert.equal(env.ui.notices().at(-1).text, t("agent.maxSteps", { n: 60 }));
+  assert.equal(env.session.messages.length, 202);
+  assert.equal(textOfMessage(env.session.messages.at(-1)), "Here is where I stopped.");
+  assert.equal(env.ui.notices().at(-1).text, t("agent.maxSteps", { n: 100 }));
 });
 
 test("tool output sent to the model is capped with a visible note", async () => {
@@ -526,6 +530,43 @@ test("a service error is shown in friendly words and the history stays valid", a
   assert.equal(mid.ui.notices().at(-1).text, t("agent.serviceError"));
   assertValidHistory(mid.session.messages);
   assert.match(textOfMessage(mid.session.messages[1]), /half/);
+});
+
+test("a stream that drops before any text is retried automatically", async () => {
+  const env = setup({
+    script: [
+      { events: [
+        { type: "block_start", index: 0, block: { type: "thinking" } },
+        { type: "thinking_delta", index: 0, text: "thinking..." },
+      ], throwAfter: new FirasLinkError("network_reset") },
+      textReply("Recovered."),
+    ],
+  });
+  const result = await run(env, "hard task", { retryDelayMs: () => 0 });
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(env.client.calls, 2, "the same request is sent again");
+  assert.equal(env.session.messages.length, 2);
+  assert.equal(textOfMessage(env.session.messages[1]), "Recovered.");
+  assert.ok(env.ui.notices().some(n => n.level === "info" && n.text === t("agent.retryingStream")));
+});
+
+test("a stream that drops after text is continued instead of ending the turn", async () => {
+  const env = setup({
+    script: [
+      { events: [
+        { type: "block_start", index: 0, block: { type: "text" } },
+        { type: "text_delta", index: 0, text: "Half an answer" },
+      ], throwAfter: new FirasLinkError("network_reset") },
+      textReply(" and the rest."),
+    ],
+  });
+  const result = await run(env, "hard task", { retryDelayMs: () => 0 });
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(env.client.calls, 2);
+  assert.equal(env.session.messages.length, 4, "user, partial answer, continue, final answer");
+  assert.match(textOfMessage(env.session.messages[1]), /Half an answer/);
+  assert.match(textOfMessage(env.session.messages[3]), /and the rest/);
+  assert.ok(env.ui.notices().some(n => n.level === "info" && n.text === t("agent.retryingStream")));
 });
 
 test("a UI that throws cannot break the turn", async () => {

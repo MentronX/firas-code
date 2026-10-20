@@ -100,7 +100,7 @@ Summarize what changed in the last three commits.
 ## اختصارات لوحة المفاتيح
 
 - إرسال الرسالة: `Enter`
-- سطر جديد: `\` ثم `Enter`، أو `Shift+Enter`
+- سطر جديد: `\` ثم `Enter`، أو `Ctrl+J` (و`Shift+Enter` في الطرفيات التي ترسله، وليست منها نافذة ويندوز القديمة)
 - إيقاف ما يفعله الآن: `Esc`
 - تبديل وضع الأذونات: `Shift+Tab`
 - توسيع المخرجات المطوية: `Ctrl+O`
@@ -115,11 +115,12 @@ Summarize what changed in the last three commits.
 - `/help` يعرض المساعدة.
 - `/clear` يبدأ محادثة جديدة.
 - `/compact` يلخّص المحادثة الطويلة ليوفّر مساحة.
-- `/effort` يضبط مقدار تفكيره: `low` أو `medium` أو `high` أو `xhigh` أو `max` أو `ultracode`.
+- `/effort` يضبط مقدار تفكيره: `low` أو `medium` أو `high` أو `xhigh` أو `max` أو `ultracode`. اكتبه وحده لتظهر قائمة المستويات: تنقّل بالأسهم، و`Tab` يقفز إلى `ultracode` ويعود، و`Enter` يختار. أو اكتب المستوى مباشرة مثل `/effort high`.
 - `ultracode` أعلى مستوى: يرسل وكلاء فرعيين يستكشفون المهمة بالتوازي، ويكتب خطة مرتبة، ويفحص بعد كل خطوة، ثم يراجع التغيير مراجعتين مستقلتين. وإن كتبت كلمة `ultracode` داخل رسالة عملت تلك الرسالة وحدها بهذا المستوى.
 - `/mode` يغيّر وضع الأذونات.
 - `/lang` يغيّر لغة الواجهة.
 - `/arabic` يتحكم بعرض العربية: `auto` أو `on` أو `off`.
+- `/skills` يعرض المهارات المتوفرة وأين تضيف غيرها. و`/skills new <name>` ينشئ مهارة جديدة من قالب.
 - `/status` يعرض حالة الجلسة.
 - `/cost` يعرض ما استُهلك في هذه الجلسة.
 - `/copy` ينسخ آخر إجابة بترتيبها الصحيح.
@@ -129,6 +130,32 @@ Summarize what changed in the last three commits.
 - `/logout` ينسى رمز الدخول المحفوظ.
 - `/update` يحدّث البرنامج.
 - `/exit` يخرج.
+
+## المهارات
+
+المهارة ملف تعليمات يحفظ طريقة عمل تتكرر، فيتبعها البرنامج كلما احتاجها. وتأتي معه سبع مهارات جاهزة:
+
+- `/review` يراجع التغييرات غير المحفوظة ويرتب المشكلات حسب خطورتها.
+- `/explain` يشرح ملفاً أو دالة أو فكرة من كود المشروع نفسه.
+- `/tests` يكتب الاختبارات أو يكملها ويشغلها حتى تنجح.
+- `/debug` يعيد إنتاج الخطأ ويجد سببه ويصلحه ويثبت الإصلاح.
+- `/docs` يكتب التوثيق أو يحدّثه ليطابق الكود.
+- `/blueprint` يبني خطة تنفيذ كاملة قبل تعديل ميزة معقدة.
+- `/design` تتفعل تلقائيا لأي مهمة تصميم واجهة أو دراسة تجربة مستخدم، وتستخدم قواعد `ui-ux-pro-max`.
+
+اكتب اسم المهارة بعد `/` ومعه ما تريد، مثل `/review ركز على الأمان`. وتظهر المهارات في قائمة `/` بعد الأوامر. ويختار البرنامج المهارة المناسبة وحده أيضاً حين تطابق طلبك.
+
+ولإضافة مهارة اكتب `/skills new <name>`، ثم عدّل الملف `SKILL.md` الذي ينشئه. تحفظ مهاراتك في مجلد `skills` داخل مجلد البرنامج، ومهارات مشروع معيّن في `.firas/skills` داخل المشروع، ولكل مهارة مجلد باسمها فيه `SKILL.md`. يبدأ الملف بهذه الأسطر:
+
+```
+---
+name: release
+description: Prepare a release: bump the version, update the changelog, tag it
+description-ar: تجهيز إصدار جديد
+---
+```
+
+ثم تكتب تحتها الخطوات بأي لغة. مهارة المشروع تغلب مهارتك بالاسم نفسه، ومهارتك تغلب المهارة الجاهزة. أما المهارات القادمة مع مشروع نسخته من الإنترنت فلها ثقة ملف `FIRAS.md` نفسه، ولا تتجاوز قواعد الأمان أبداً.
 
 ## الأمان
 
@@ -156,6 +183,8 @@ Summarize what changed in the last three commits.
 - إن كانت طرفيتك تعالج العربية وحدها وظهر النص مزدوج الانعكاس، اكتب `/arabic off`. ولتعيده اكتب `/arabic on`. وهناك خيار التشغيل `--no-arabic` ومتغير البيئة `FIRAS_ARABIC=off`.
 - يكفي في الغالب خط الطرفية الافتراضي لأنها تستعين بخط النظام للحروف العربية. وإن ظهرت الحروف مفككة أو مربعات فجرّب خطاً فيه حروف عربية، مثل DejaVu Sans Mono أو Kawkab Mono.
 - في نافذة ويندوز القديمة (cmd أو PowerShell بدون Windows Terminal) لا يستعين الخط بغيره، فيبدّل البرنامج خط النافذة إلى Courier New تلقائياً إن لم يكن خطها يعرض العربية. التبديل للنافذة الحالية فقط ولا يُحفظ. ولإيقافه ضع متغير البيئة `FIRAS_FONT=keep`.
+- هذه النافذة لا ترتب العربية بنفسها أبداً، لذلك يبقى عرض العربية مفعلاً فيها حتى لو حُفظ `off` من قبل، ويحذف البرنامج التشكيل وعلامات الاتجاه المخفية قبل الرسم، لأنها تأخذ فيها خانة كاملة فتُخرج السطر عن مكانه. ويستعمل فيها رموزاً يرسمها خطها فقط.
+- إن ظهرت رموز الواجهة مربعات في طرفية ما فاختر مجموعة الرموز بمتغير البيئة `FIRAS_GLYPHS`: `full` أو `console` أو `ascii`.
 
 ## حل المشكلات
 
@@ -295,7 +324,7 @@ Summarize what changed in the last three commits.
 ### Keyboard shortcuts
 
 - Send the message: `Enter`
-- New line: `\` then `Enter`, or `Shift+Enter`
+- New line: `\` then `Enter`, or `Ctrl+J` (and `Shift+Enter` in terminals that send it; the classic Windows console does not)
 - Stop what it is doing: `Esc`
 - Switch permission mode: `Shift+Tab`
 - Expand folded output: `Ctrl+O`
@@ -310,11 +339,12 @@ Type `/` at the start of a message to see the list.
 - `/help` shows help.
 - `/clear` starts a fresh conversation.
 - `/compact` summarizes a long conversation to free up room.
-- `/effort` sets how hard it thinks: `low`, `medium`, `high`, `xhigh`, `max` or `ultracode`.
+- `/effort` sets how hard it thinks: `low`, `medium`, `high`, `xhigh`, `max` or `ultracode`. Type it alone to get the list of levels: move with the arrows, `Tab` jumps to `ultracode` and back, `Enter` chooses. Or name the level directly, as in `/effort high`.
 - `ultracode` is the top level: sub-agents map the task in parallel, it writes a checklist plan, checks after every step, and has the change reviewed twice, independently. Writing the word `ultracode` in a message gives that one message the same treatment.
 - `/mode` changes the permission mode.
 - `/lang` changes the interface language.
 - `/arabic` controls Arabic display: `auto`, `on` or `off`.
+- `/skills` lists the available skills and where to add more. `/skills new <name>` creates a new one from a template.
 - `/status` shows the state of the session.
 - `/cost` shows what this session has used.
 - `/copy` copies the last answer in its correct order.
@@ -324,6 +354,32 @@ Type `/` at the start of a message to see the list.
 - `/logout` forgets the saved access code.
 - `/update` updates the program.
 - `/exit` quits.
+
+### Skills
+
+A skill is a file of instructions that captures a way of working you repeat, so it follows that way whenever it is needed. Seven come built in:
+
+- `/review` reviews the uncommitted changes and ranks the problems by severity.
+- `/explain` explains a file, a function or an idea from the project's own code.
+- `/tests` writes or extends tests and runs them until they pass.
+- `/debug` reproduces a failure, finds its cause, fixes it and proves the fix.
+- `/docs` writes or updates documentation to match the code.
+- `/blueprint` builds a complete execution plan before changing a complex feature.
+- `/design` activates automatically for interface design and UX study tasks, and applies the `ui-ux-pro-max` rules.
+
+Type the skill's name after `/` together with what you want, as in `/review focus on security`. Skills appear in the `/` menu after the commands, and it also picks a fitting skill by itself when one matches your request.
+
+To add a skill, type `/skills new <name>` and edit the `SKILL.md` file it creates. Your skills live in the `skills` folder inside the program's folder, a project's own skills in `.firas/skills` inside the project, and each skill is a folder with its name holding a `SKILL.md`. The file starts with these lines:
+
+```
+---
+name: release
+description: Prepare a release: bump the version, update the changelog, tag it
+description-ar: تجهيز إصدار جديد
+---
+```
+
+followed by the steps, in any language. A project skill wins over yours with the same name, and yours wins over a built-in one. Skills that come with a project you cloned from the internet get the same trust as its `FIRAS.md`, and never override the safety rules.
 
 ### Safety
 
@@ -351,6 +407,8 @@ There are four permission modes, switched with `Shift+Tab` or `/mode`:
 - If your terminal already handles Arabic by itself and the text looks flipped twice, type `/arabic off`. Type `/arabic on` to switch it back. There is also the `--no-arabic` option and the `FIRAS_ARABIC=off` environment variable.
 - The default terminal font is usually fine because terminals borrow a system font for Arabic letters. If letters look broken or show as boxes, try a font that includes Arabic, such as DejaVu Sans Mono or Kawkab Mono.
 - The classic Windows console window (cmd or PowerShell without Windows Terminal) borrows no other font, so when its font cannot draw Arabic the program switches that window to Courier New by itself. Only the current window changes, and nothing is saved. Set `FIRAS_FONT=keep` to turn this off.
+- That window never arranges Arabic by itself, so Arabic display stays on there even if `off` was saved before, and the program removes vowel marks and hidden direction marks before drawing: that window gives each one a whole cell, which pushes the line out of place. It also uses only symbols its font can draw.
+- If interface symbols show as boxes in some terminal, choose the symbol set with the `FIRAS_GLYPHS` environment variable: `full`, `console` or `ascii`.
 
 ### Troubleshooting
 

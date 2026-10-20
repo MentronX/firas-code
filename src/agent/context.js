@@ -175,10 +175,21 @@ export async function maybeCompact({ session, client, signal, ui, force = false,
   const before = Math.max(estimateTokens(messages, system, tools), session.contextTokens || 0);
   if (!force && before <= threshold) return { compacted: false, before, after: before };
 
-  const k = tailStart(messages);
+  let k = tailStart(messages);
   if (k < 2) {
-    if (force) u.notice("info", t("agent.compactNothing"));
-    return { compacted: false, before, after: before, reason: "nothing" };
+    // A short history can still be over the limit (a few huge messages). Keep the last user message and
+    // summarize everything before it, so the turn can continue instead of failing as too large. A tiny
+    // conversation that is under the limit still has nothing to compact.
+    if (before <= threshold) {
+      if (force) u.notice("info", t("agent.compactNothing"));
+      return { compacted: false, before, after: before, reason: "nothing" };
+    }
+    const lastUser = messages.map((m, i) => (m.role === "user" ? i : -1)).filter(i => i >= 0).pop();
+    if (lastUser === undefined || lastUser < 1) {
+      if (force) u.notice("info", t("agent.compactNothing"));
+      return { compacted: false, before, after: before, reason: "nothing" };
+    }
+    k = lastUser;
   }
   const head = messages.slice(0, k);
   const tail = messages.slice(k);

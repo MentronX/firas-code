@@ -238,7 +238,7 @@ test("/help lists every command in groups, plus the shortcuts", async () => {
   const text = printed.join("\n");
   for (const cmd of COMMANDS) assert.ok(text.includes(`/${cmd.name}`), `/${cmd.name} missing from the help`);
   for (const heading of ["Conversation", "Settings", "Information", "Account and updates", "Keyboard"]) assert.ok(text.includes(heading), heading);
-  for (const key of ["Shift+Tab", "Ctrl+O", "Alt+Enter", "Esc"]) assert.ok(text.includes(key), key);
+  for (const key of ["Shift+Tab", "Ctrl+O", "Ctrl+J", "Ctrl+Enter", "Esc"]) assert.ok(text.includes(key), key);
   assert.ok(!text.includes("Ctrl+T") && !/thinking/i.test(text), "no shortcut or command for the model's reasoning text");
   setLang("ar");
   const ar = makeCtx();

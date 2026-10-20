@@ -18,6 +18,7 @@
 // starts (seen on the real thing), so the app's own title travels in FIRAS_TITLE and is put back first thing.
 import { spawn as nodeSpawn } from "node:child_process";
 import { childEnv } from "../util/env.js";
+import { isModernTerminal, isClassicConsole } from "./terminal.js";
 
 export const WANTED_FONT = "Courier New";
 
@@ -88,19 +89,13 @@ try {
 } catch { 'error|' + $_.Exception.Message }
 `;
 
-/** Terminals that pick another font for a letter their own font lacks. */
-export function isModernTerminal(env = {}) {
-  const term = String(env.TERM || "");
-  return !!(env.WT_SESSION || env.TERM_PROGRAM || env.WEZTERM_EXECUTABLE || env.ConEmuANSI || env.ConEmuTask ||
-    env.ALACRITTY_LOG || /xterm|rxvt|tmux|screen|cygwin|msys/i.test(term));
-}
+export { isModernTerminal, isClassicConsole };
 
-/** Only the classic Windows console, only on a real terminal, and never when FIRAS_FONT says to keep the font. */
+/** Only the classic Windows console, and never when FIRAS_FONT says to keep the font. */
 export function shouldFixConsoleFont({ platform = process.platform, env = process.env, stdout = process.stdout } = {}) {
-  if (platform !== "win32" || !stdout || !stdout.isTTY) return false;
+  if (!isClassicConsole({ platform, env, stdout })) return false;
   const pref = String(env.FIRAS_FONT || "").trim().toLowerCase();
-  if (pref === "keep" || pref === "off" || pref === "0" || pref === "no" || pref === "false") return false;
-  return !isModernTerminal(env);
+  return !(pref === "keep" || pref === "off" || pref === "0" || pref === "no" || pref === "false");
 }
 
 /** The script's one line as { status, from, to }. Anything unexpected is "error". */

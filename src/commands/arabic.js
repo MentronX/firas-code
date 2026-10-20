@@ -1,6 +1,7 @@
 // /arabic [auto|on|off]: whether the app shapes and reorders Arabic itself. Windows Terminal and most terminals need it
 // ("auto"/"on"); a terminal that already does its own bidi shows doubled-up text with it, so "off" exists. A sample
-// line is printed after a change so the person can see at once whether it looks right.
+// line is printed after a change so the person can see at once whether it looks right. The classic Windows console
+// never does its own bidi, so "off" there is warned about and not kept for the next start.
 import { t } from "../i18n/index.js";
 import { ARABIC_MODES } from "../config.js";
 import { para, contentWidth } from "../ui/views.js";
@@ -29,6 +30,9 @@ export const arabicCommand = {
     }
     ctx.setArabic(mode);
     ctx.ui.notice("info", t("app.arabic.set", { mode }));
+    // The classic Windows console never arranges Arabic itself: "off" there shows it backwards, and is not kept for
+    // the next start (cli.js arabicSetting).
+    if (mode === "off" && ctx.classicConsole) ctx.ui.notice("warn", t("app.arabic.offClassic"));
     ctx.ui.print(para(t("app.arabic.sample"), contentWidth(ctx.screen?.width?.() ?? 80)));
   },
 };

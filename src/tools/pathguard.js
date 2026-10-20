@@ -130,7 +130,12 @@ export function isSecretPath(p, platform = process.platform) {
   try {
     const own = fold(flavor(platform).resolve(homeDir()), platform);
     const abs = fold(flavor(platform).resolve(p), platform);
-    if (abs === own || abs.startsWith(own + flavor(platform).sep)) return true;
+    const rel = flavor(platform).relative(own, abs);
+    if (rel === "") return true;
+    // The app's own folder also holds its source and skills; only the settings and the saved
+    // conversations are secrets. Marking the whole folder made every project under it look secret.
+    const first = rel.split(/[\\/]+/)[0].toLowerCase();
+    if (first === "config.json" || first === "config.json.bad" || first === "sessions") return true;
   } catch { /* relative junk is not ours */ }
   return false;
 }
@@ -155,10 +160,15 @@ function systemRoots(platform, env) {
 }
 
 /** True for the operating system's own folders or a drive / filesystem root itself. */
-export function isSystemPath(p, { platform = process.platform, env = process.env } = {}) {
+export function isSystemPath(p, { platform = process.platform, env = process.env, realpath = fs.realpathSync.native } = {}) {
   if (typeof p !== "string" || !p) return false;
   const P = flavor(platform);
-  const abs = P.resolve(p);
+  let abs = P.resolve(p);
+  // Windows 8.3 short names and trailing dots/spaces name the same folder; resolve before comparing.
+  // Only on the host platform: a simulated platform's paths cannot be resolved by this machine.
+  if (platform === process.platform) {
+    try { abs = realpath(abs); } catch { /* a path that does not exist keeps its lexical form */ }
+  }
   if (fold(abs, platform) === fold(P.parse(abs).root, platform)) return true;
   return systemRoots(platform, env).some(dir => isWithin(dir, abs, platform));
 }

@@ -36,19 +36,35 @@ function splitAbsolute(pattern) {
  * was judged to be: inside the project, or (for a folder outside it that the person approved) inside that folder, links
  * followed. Returns the guard of the first start that is not, else `g` itself.
  */
+/** The deepest folder that contains both paths, so one permission question covers every start. */
+function commonAncestor(a, b, P) {
+  const as = P.resolve(a).split(P.sep);
+  const bs = P.resolve(b).split(P.sep);
+  const out = [];
+  for (let i = 0; i < Math.min(as.length, bs.length); i++) {
+    if (as[i].toLowerCase() !== bs[i].toLowerCase()) break;
+    out.push(as[i]);
+  }
+  return out.join(P.sep) || P.sep;
+}
+
 function reach(g, pattern, s) {
   if (!g.ok) return g;
   const P = s.platform === "win32" ? path.win32 : path.posix;
   let prefixes;
   try { prefixes = compileGlob(pattern).prefixes; } catch { return g; } // a malformed pattern is reported by the search itself
+  let uncovered = null;
   for (const prefix of prefixes) {
     if (!prefix) continue;
     const start = guardPath(P.resolve(g.abs, prefix), { cwd: s.cwd, platform: s.platform });
     if (!start.ok) return start;
     const covered = g.inside ? start.inside : isWithin(g.abs, start.abs, s.platform) && isWithin(g.real, start.real, s.platform);
-    if (!covered) return start;
+    if (!covered) {
+      // The search visits every prefix, so the question must cover every uncovered start, not just the first.
+      uncovered = uncovered ? guardPath(commonAncestor(uncovered.abs, start.abs, P), { cwd: s.cwd, platform: s.platform }) : start;
+    }
   }
-  return g;
+  return uncovered || g;
 }
 
 function plan(input, ctx) {

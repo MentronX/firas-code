@@ -1,4 +1,4 @@
-// Small width helpers shared by the terminal widgets (spinner, banner, input editor).
+// Small width and direction helpers shared by the terminal widgets (spinner, banner, input editor, views).
 //
 // Everything here works on PLAIN or already-styled text and never emits an escape code itself:
 // the one function that has to (clipping a visual line) lives in screen.js.
@@ -14,6 +14,27 @@ export function stripBidiMarks(s) {
 /** Keeps a Latin snippet (a command, a path) in one piece inside Arabic text, with its own punctuation. */
 export function ltrIsolate(s) {
   return "\u2066" + s + "\u2069";
+}
+
+/**
+ * Keeps a run in one piece and lets ITS OWN first letter decide its direction (a first-strong isolate). For text of
+ * unknown direction inside a structural line: an Arabic summary that starts with a number ("1 \u0645\u0646 3") would otherwise
+ * hand that number to the left-to-right line around it and read backwards.
+ */
+export function autoIsolate(s) {
+  return "\u2068" + s + "\u2069";
+}
+
+// The Arabic marks (harakat, tanween, shadda, sukun, the superscript alef and the Quranic signs). The text layer gives
+// them no column; Windows Terminal and the classic console give each one a cell of its own, so a framed row that holds
+// one pushes its border out. Letters are already shaped and in place, so dropping them moves nothing.
+const ARABIC_MARK = /[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06dc\u06df-\u06e4\u06e7\u06e8\u06ea-\u06ed]/;
+const ARABIC_MARKS = /[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06dc\u06df-\u06e4\u06e7\u06e8\u06ea-\u06ed]/g;
+
+/** Removes the Arabic combining marks (see above). Escape sequences hold none of them and pass through. */
+export function dropArabicMarks(s) {
+  const text = String(s ?? "");
+  return ARABIC_MARK.test(text) ? text.replace(ARABIC_MARKS, "") : text;
 }
 
 /**

@@ -13,16 +13,39 @@
 //  - A table header row must start with "|" (a delimiter row must follow). Tables are laid out when they end.
 //  - No indented code blocks, setext headings, reference links, footnotes or raw HTML (except <br> inside table cells).
 //  - Markers dropped from view (#, **, `...`) keep their meaning in colour; with colour level 0 the structure still
-//    reads: backticks stay around code, bullets and numbers stay, links print "(url)", H1/H2 get a rule.
+//    reads: backticks stay around code, ~~ around struck text, bullets and numbers stay, links print "(url)", H1/H2 get
+//    a rule.
 //  - Code is always left-to-right and left-aligned. Arabic inside a code line (a string, a comment) is joined AND its
 //    own run is put in reading order with toVisual(dir "ltr"); the code around it never moves. (shapeLine alone would
 //    show Arabic words back to front on a terminal.)
 //  - Model text is untrusted: escape sequences, control characters and bidi controls are removed before layout.
 //  - Early commit of a growing paragraph line (stream.js) is exact: rows are released only up to the "stable offset"
 //    (before any unclosed *, _, `, [ and before the last unfinished word), see parseInline().
-import { c, sym, hasUnicode, colorLevel } from "./theme.js";
+//
+// Inline styles, in the two kinds of terminal (theme.js textEffects()). The classic Windows console draws no dim,
+// italic or strike (theme.js turns them into colours) and a background as dark as the panel colour does not show on
+// its black screen, so each inline style has a second form there. Every pair stays distinct in both:
+//                     effects drawn (modern terminal)         effects not drawn (classic console)
+//    *em*             italic                                  the soft accent (what c.italic becomes)
+//    **strong**       bold                                    bold (the console's bright white)
+//    `code`           soft accent on the panel, padded " x "  magenta, no padding: with no background to fill, the
+//                                                             padding would only read as a double space
+//    [link](url)      underlined, " (url)" dim                the same: the console draws underline
+//    ~~strike~~       struck through                          a faint gray AND the ~~ kept: struck text often says
+//                                                             "not this", and a colour alone reads as "less important"
+//    With no colour at all the ~~ stay too, for the same reason the backticks stay around code.
+//  - Block tones (dev/DESIGN.md): headings H1 bold accent + rule, H2 bold accent, H3 bold, H4-H6 bold dim. A quote bar is
+//    the soft accent and a code bar gray, so the two differ even where both glyphs are the same "│". Quoted text is dim
+//    and, where it can be drawn, italic (on the classic console italic would turn the whole quote the soft accent, the
+//    colour of emphasis). Rules, table borders and the code bar are structure: gray. Bullets and numbers are dim: the
+//    accent is a signal, and a long list would otherwise put dozens of accent marks on the screen.
+//  - Links and URLs are isolated like code spans: a URL (bare, <auto>, or the " (url)" after a label) in a left-to-right
+//    isolate, a label in an isolate of its own direction (decided once, from the whole label, so a label cut by a line
+//    break keeps it on both rows). Otherwise the ")" of a URL that wraps, or the "!" of a Latin label, takes the
+//    direction of the Arabic line around it and lands on the wrong side.
+import { c, sym, colorLevel, textEffects } from "./theme.js";
 import { registerStrings, t } from "../i18n/index.js";
-import { layoutParagraph, wrapLogical, stringWidth, stripAnsi, toVisual, arabicActive } from "../text/display.js";
+import { layoutParagraph, orderRows, wrapLogical, stringWidth, stripAnsi, toVisual, arabicActive } from "../text/display.js";
 import { createLineHighlighter, paintTokens, wrapTokens } from "./highlight.js";
 
 registerStrings("markdown", {
@@ -33,13 +56,13 @@ registerStrings("markdown", {
 const MAX_W = 100;
 const LIMIT = 800;
 
-const U = hasUnicode;
 export const glyphs = Object.freeze({
-  bullets: U ? ["•", "◦", "▪"] : ["*", "-", "+"],
-  cont: U ? "↪" : ">",
-  box: U
-    ? { h: "─", v: "│", tl: "╭", tr: "╮", bl: "╰", br: "╯", tt: "┬", bt: "┴", lt: "├", rt: "┤", x: "┼" }
-    : { h: "-", v: "|", tl: "+", tr: "+", bl: "+", br: "+", tt: "+", bt: "+", lt: "+", rt: "+", x: "+" },
+  bullets: sym.bullets,
+  cont: sym.cont,
+  box: Object.freeze({
+    h: sym.boxH, v: sym.boxV, tl: sym.boxTL, tr: sym.boxTR, bl: sym.boxBL, br: sym.boxBR,
+    tt: sym.boxT, bt: sym.boxB, lt: sym.boxL, rt: sym.boxR, x: sym.boxX,
+  }),
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -87,6 +110,13 @@ export function splitLines(buf, from = 0) {
 // Inline parsing
 
 const BOLD = 1, ITALIC = 2, STRIKE = 4, CODE = 8, LINK = 16, DIM = 32, ACCENT = 64;
+// Not styles: where the bidi isolates go (paintRuns). HREF = a URL, LABEL = part of a link label, LABEL_RTL = that
+// label reads right to left.
+const HREF = 128, LABEL = 256, LABEL_RTL = 512;
+// A code span's padding blank (PAD) and the content between the two (BODY), kept in runs of their own (Arabic only,
+// see paintRun) so that where a stream cuts the span can never decide which blank lands inside the span's isolate.
+const PAD = 1024, BODY = 2048;
+const LABELS = LABEL | LABEL_RTL;
 
 const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'" };
 
@@ -158,12 +188,17 @@ function parseDestination(src, p) {
   return src.length - p < 1500 ? "pending" : null;
 }
 
+// Punctuation that ends a sentence, not a URL. The Arabic comma, semicolon, question mark and full stop are glued to
+// the word before them as often as the Latin ones; kept in the URL they would be drawn inside its left-to-right isolate,
+// on the wrong side of it.
+const URL_TAIL = /[.,;:!?'"*_~\]}>\u060c\u061b\u061f\u06d4]+$/;
+
 function trimUrl(url) {
-  let u = url.replace(/[.,;:!?'"*_~\]}>]+$/, "");
+  let u = url.replace(URL_TAIL, "");
   for (;;) {
     if (!u.endsWith(")")) break;
     const open = (u.match(/\(/g) || []).length, close = (u.match(/\)/g) || []).length;
-    if (close > open) u = u.slice(0, -1).replace(/[.,;:!?'"*_~\]}>]+$/, ""); else break;
+    if (close > open) u = u.slice(0, -1).replace(URL_TAIL, ""); else break;
   }
   return u;
 }
@@ -295,6 +330,8 @@ function matchEmphasis(toks) {
       }
       op.rem -= use;
       cl.rem -= use;
+      // A ~~ run is used whole (n is 2), so it is in one pair at most; parseInline may print it again.
+      if (flag === STRIKE) op.struck = cl.struck = true;
       pairs.push([oi, ci]);
     }
   }
@@ -344,6 +381,9 @@ export function parseInline(src, o) {
     rlen += t.length;
   };
   const level = colorLevel();
+  // See the header: where strike cannot be drawn its ~~ stay; where a background cannot be seen code is not padded.
+  const effects = level > 0 && textEffects();
+  const code = s => (effects ? ` ${s} ` : level ? s : `\`${s}\``);
   for (const tk of toks) {
     if (stableR < 0 && S !== null) {
       if (tk.a >= S) stableR = rlen;
@@ -355,16 +395,20 @@ export function parseInline(src, o) {
       }
     }
     if (tk.k === "t") push(decodeText(src.slice(tk.a, tk.b)), tk.f);
-    else if (tk.k === "d") push(tk.ch.repeat(tk.rem), tk.f);
-    else if (tk.k === "c") push(level ? ` ${tk.s} ` : `\`${tk.s}\``, tk.f | CODE);
-    else if (tk.k === "u") push(tk.s, tk.f | LINK);
+    else if (tk.k === "d") push(tk.struck && !effects ? "~~" : tk.ch.repeat(tk.rem), tk.struck ? tk.f | STRIKE : tk.f);
+    else if (tk.k === "c") {
+      if (effects && arabicActive()) { push(" ", tk.f | CODE | PAD); push(tk.s, tk.f | CODE | BODY); push(" ", tk.f | CODE | PAD); }
+      else push(code(tk.s), tk.f | CODE);
+    }
+    else if (tk.k === "u") push(tk.s, tk.f | LINK | HREF);
     else if (tk.k === "br") push(br, tk.f);
     else if (tk.k === "l") {
-      let label = "";
-      for (const r of tk.label) { push(r.t, r.f | tk.f | LINK); label += r.t; }
-      if (tk.alt) push(tk.alt, tk.f | LINK);
+      const label = tk.label.map(r => r.t).join("");
       const text = tk.alt || label;
-      if (tk.url && tk.url !== text && tk.url.replace(/^https?:\/\//, "") !== text) push(` (${tk.url})`, DIM);
+      const iso = LABEL | (lineDirection(label + (tk.alt || ""), null, true) === "rtl" ? LABEL_RTL : 0);
+      for (const r of tk.label) push(r.t, r.f | tk.f | LINK | iso);
+      if (tk.alt) push(tk.alt, tk.f | LINK | iso);
+      if (tk.url && tk.url !== text && tk.url.replace(/^https?:\/\//, "") !== text) push(` (${tk.url})`, DIM | HREF);
     }
   }
   if (stableR < 0) stableR = rlen;
@@ -374,25 +418,33 @@ export function parseInline(src, o) {
 // Code is left-to-right whatever surrounds it. Inside a right-to-left paragraph its trailing punctuation (a closing
 // quote, "()", ";", "/") would otherwise take the paragraph's direction and jump to the front of the span, so a span is
 // wrapped in a left-to-right isolate (invisible: toVisual drops it; wrapLogical re-opens it on a continuation row).
+// URLs get the same isolate, link labels one of their own direction (see the header).
 const LRI = "\u2066";
+const RLI = "\u2067";
 const PDI = "\u2069";
 const ISOLATES = new RegExp(`[${LRI}-${PDI}]`, "g");
 
 function paintRun(t, f) {
   if (t === "") return "";
   if (t.indexOf("\n") !== -1) return t.split("\n").map(x => paintRun(x, f)).join("\n");
-  if (!(f & CODE) || !arabicActive()) return paintStyled(t, f);
+  if (!(f & (CODE | HREF)) || !arabicActive() || (f & PAD)) return paintStyled(t, f);
   // The padding blanks stay outside the isolate: next to the blank that follows the span they must remain one run of
-  // spaces, or a line break would no longer swallow them together.
+  // spaces, or a line break would no longer swallow them together. A padded span's blanks are PAD runs of their own,
+  // so its content goes into the isolate whole - its own leading blank included, wherever a stream cut the span.
+  if (f & BODY) return paintStyled(LRI + t + PDI, f);
   const lead = t.startsWith(" ") ? 1 : 0;
   const tail = t.length > lead && t.endsWith(" ") ? 1 : 0;
-  return paintStyled(t.slice(0, lead) + LRI + t.slice(lead, t.length - tail) + PDI + t.slice(t.length - tail), f);
+  const body = t.slice(lead, t.length - tail);
+  // Nothing but blanks (a "` `" span on the classic console): there is no order to keep, and an isolate of nothing or
+  // of blanks would be a word that a line break can neither split nor swallow, stranded on a row of its own.
+  if (/^ *$/.test(body)) return paintStyled(t, f);
+  return paintStyled(t.slice(0, lead) + LRI + body + PDI + t.slice(t.length - tail), f);
 }
 
 function paintStyled(t, f) {
   if (!colorLevel()) return t;
   let s = t;
-  if (f & CODE) s = c.bgPanel(c.accentSoft(s));
+  if (f & CODE) s = textEffects() ? c.bgPanel(c.accentSoft(s)) : c.magenta(s);
   if (f & STRIKE) s = c.strike(s);
   if (f & ITALIC) s = c.italic(s);
   if (f & BOLD) s = c.bold(s);
@@ -405,7 +457,35 @@ function paintStyled(t, f) {
 /** Runs -> one logical styled string; `base` flags are added to every run. */
 export function paintRuns(runs, base = 0) {
   let out = "";
-  for (const r of runs) out += paintRun(r.t, r.f | base);
+  if (!arabicActive()) {
+    for (const r of runs) out += paintRun(r.t, r.f | base);
+    return out;
+  }
+  // The runs of one link label (bold inside it, an image's alt text) share ONE isolate: an isolate per run would let
+  // the paragraph order the pieces, and a Latin label inside Arabic would come out word by word backwards. Blanks at
+  // either end of the label stay outside it, for the reason given in paintRun.
+  for (let i = 0; i < runs.length;) {
+    const g = runs[i].f & LABELS;
+    if (!g) { out += paintRun(runs[i].t, runs[i].f | base); i++; continue; }
+    let j = i;
+    while (j < runs.length && (runs[j].f & LABELS) === g) j++;
+    const parts = runs.slice(i, j).map(r => ({ t: r.t, f: r.f | base }));
+    let pre = "", post = "";
+    while (parts.length && parts[0].t.startsWith(" ")) {
+      const p = parts[0], lead = /^ +/.exec(p.t)[0];
+      pre += paintRun(lead, p.f);
+      if (lead === p.t) parts.shift(); else parts[0] = { t: p.t.slice(lead.length), f: p.f };
+    }
+    while (parts.length && parts[parts.length - 1].t.endsWith(" ")) {
+      const p = parts[parts.length - 1], trail = / +$/.exec(p.t)[0];
+      post = paintRun(trail, p.f) + post;
+      if (trail === p.t) parts.pop(); else parts[parts.length - 1] = { t: p.t.slice(0, -trail.length), f: p.f };
+    }
+    let body = "";
+    for (const p of parts) body += paintRun(p.t, p.f);
+    out += pre + (body ? (g & LABEL_RTL ? RLI : LRI) + body + PDI : "") + post;
+    i = j;
+  }
   return out;
 }
 
@@ -528,11 +608,15 @@ export function isPlainStart(s) {
   }
 }
 
-/** Visual rows for logical rows of one paragraph: what layoutParagraph does after wrapping, with an explicit direction. */
-function visualRows(lrows, dir, cw) {
-  if (!arabicActive()) return lrows;
-  const align = dir === "rtl" ? "end" : "start";
-  return lrows.map(r => toVisual(r, { dir, width: cw, align }));
+/**
+ * Visual rows for logical rows of one paragraph: what layoutParagraph does after wrapping, with an explicit direction.
+ * `before` (the rows of the paragraph already out) and `open` (more of it to come) as in orderRows; returns its result.
+ */
+// How many finished rows of a streamed paragraph may wait for the letter that decides how their ends look (earlyPara).
+const HOLD_ROWS = 6;
+
+function visualRows(lrows, dir, cw, before, open) {
+  return orderRows(lrows, { dir, width: cw, align: dir === "rtl" ? "end" : "start", before, open });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -587,18 +671,22 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
   // ---- row builders (pure) -------------------------------------------------------------------
   function textRows(text, base, cw, firstIndent, indentStr) {
     const P = parseInline(text, { final: true });
-    const logical = paintRuns(P.runs, base);
+    // Emphasis inside italic text (a quote) is set upright, the typographer's rule: italic in italic would not show.
+    const runs = base & ITALIC ? P.runs.map(r => ({ t: r.t, f: r.f ^ ITALIC })) : P.runs;
+    const logical = paintRuns(runs, base & ~ITALIC);
     if (logical === "") return [firstIndent.replace(/\s+$/, "")];
     return layoutParagraph(logical, cw, { dir: lineDirection(text, forced, true), align: "auto", firstIndent, indent: indentStr });
   }
 
+  // Four looks, each made only of what every terminal draws (bold, colour, a rule): H1 bold accent over a rule, H2 bold
+  // accent, H3 bold, H4-H6 bold dim. Without colour H2 takes the rule too, so it still stands apart from the text.
   function headingRows(level, text, cw) {
-    const base = level === 1 ? BOLD | ACCENT : level === 2 ? BOLD | ACCENT : level === 3 ? BOLD : level === 4 ? BOLD | ITALIC : level === 5 ? BOLD | DIM : DIM | ITALIC;
+    const base = level <= 2 ? BOLD | ACCENT : level === 3 ? BOLD : BOLD | DIM;
     const rows = textRows(text, base, cw, "", "");
     if (level <= 2 && (level === 1 || !colorLevel()) && text.trim() !== "") {
       const ruleW = Math.min(cw, Math.max(3, ...rows.map(r => stringWidth(r.trimStart()))));
       const d = lineDirection(text, forced, true);
-      rows.push((d === "rtl" ? " ".repeat(cw - ruleW) : "") + c.dim(hline(ruleW)));
+      rows.push((d === "rtl" ? " ".repeat(cw - ruleW) : "") + c.gray(hline(ruleW)));
     }
     return rows;
   }
@@ -616,7 +704,7 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
     if (task) { box = task[1] === " " ? c.dim(sym.checkbox) : c.green(sym.checked); text = text.slice(task[0].length); }
     let label;
     if (ordered) label = c.dim(marker) + (box ? " " + box : "");
-    else label = box || c.accent(glyphs.bullets[depth % glyphs.bullets.length]);
+    else label = box || c.dim(glyphs.bullets[depth % glyphs.bullets.length]);
     const content = markerCol + stringWidth(label) + 1;
     const kind = ordered ? "1" : marker;
     stack.push({ ind, content, kind });
@@ -631,19 +719,19 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
   }
 
   function quoteRows(depth, text, cw) {
-    const bar = (c.dim(sym.quote) + " ").repeat(depth);
-    return textRows(text.trim(), DIM | ITALIC, cw, bar, bar);
+    const bar = (c.accentSoft(sym.quote) + " ").repeat(depth);
+    return textRows(text.trim(), textEffects() ? DIM | ITALIC : DIM, cw, bar, bar);
   }
 
   function codeRows(tokens, cw, pad) {
-    const bar = c.dim(sym.quote);
+    const bar = c.gray(sym.quote);
     const avail = Math.max(4, cw - pad - 2);
     const plain = tokens.map(x => x[1]).join("");
     let rows;
     if (plain === "") return [" ".repeat(pad) + bar];
     if (stringWidth(plain) <= avail) rows = [tokens];
     else rows = wrapTokens(tokens, avail, Math.max(2, avail - 2), stringWidth);
-    return rows.map((r, i) => " ".repeat(pad) + bar + " " + (i ? c.dim(glyphs.cont) + " " : "") + toVisual(paintTokens(r), { dir: "ltr" }));
+    return rows.map((r, i) => " ".repeat(pad) + bar + " " + (i ? c.gray(glyphs.cont) + " " : "") + toVisual(paintTokens(r), { dir: "ltr" }));
   }
 
   // ---- tables --------------------------------------------------------------------------------
@@ -738,7 +826,7 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
     const b = glyphs.box;
     const order = [...widths.keys()];
     if (mirrored) order.reverse();
-    const bar = x => c.dim(x);
+    const bar = x => c.gray(x);
     const rule = (l, m, r) => bar(l + order.map(ci => b.h.repeat(widths[ci] + 2)).join(m) + r);
     const lead = mirrored && tw < cw ? " ".repeat(cw - tw) : "";
     const visual = all.map((_, ri) => {
@@ -813,7 +901,7 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
     if (pl && pl.begun) {
       // Rows of this line are already out: lay out only what is left of it, at the width in force now.
       const rest = paintRuns(pl.runs.concat(parseInline(d.text, { final: true, from: pl.at }).runs), 0);
-      if (rest !== "") for (const r of layoutParagraph(rest, cw, { dir: pl.dir, align: "auto" })) emit(r);
+      if (rest !== "") for (const r of layoutParagraph(rest, cw, { dir: pl.dir, align: "auto", before: pl.before })) emit(r);
       return;
     }
     begin("para");
@@ -862,7 +950,7 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
         if (lang) {
           fence.begun = true;
           begin("code", nested);
-          emit(" ".repeat(pad) + c.dim(sym.quote) + " " + c.dim(lang));
+          emit(" ".repeat(pad) + c.gray(sym.quote) + " " + c.dim(lang));
         }
         return;
       }
@@ -875,7 +963,7 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
       case "hr":
         list = [];
         begin("hr");
-        emit(c.dim(hline(cw)));
+        emit(c.gray(hline(cw)));
         return;
       case "quote":
         list = [];
@@ -947,13 +1035,18 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
     const row = wrapTokens([["p", text]], cw, cw, stringWidth)[0] || [];
     return row.map(x => x[1]).join("");
   };
+  // A table row still being typed, shown as its dim source, cut to the width. It is shaped and its Arabic put in reading
+  // order (an LTR line, like code): the cut measured the joined letters, and unjoined ones would be wider on screen.
+  const rawRow = (text, cw) => c.dim(toVisual(clip(text.trim(), cw), { dir: "ltr" }));
 
   function rowStarts(plain, lrows) {
     const starts = [];
     let pos = 0;
     for (const row of lrows) {
       const t = stripAnsi(row).replace(ISOLATES, "");
-      while (pos < plain.length && plain[pos] === " " && t[0] !== " ") pos++;
+      // The blanks a line break swallowed are in no row. Skip as many as it takes for the row to match: the row itself
+      // may start with a blank the break could not reach (one inside an isolate, such as a code span's own space).
+      while (pos < plain.length && plain[pos] === " " && (t === "" || !plain.startsWith(t, pos))) pos++;
       starts.push(pos);
       pos += t.length;
     }
@@ -965,8 +1058,14 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
   // source offset pl.at), so each call parses and lays out only what has arrived since.
   // A row is final when the word after it cannot fit on it, and only the stable part may be used to decide that: text
   // glued to the last stable word (an unclosed ` or [ in the middle of a word) may still change that word's width.
+  // The end of a row takes its direction from the first strong letter after it (see orderRows), so a row is out for good
+  // only once that letter is in the stable text; pl.before carries what the rows already out leave to the next one.
+  // At most HOLD_ROWS finished rows wait for that letter: rows with no letter at all (a long run of arrows, emoji or
+  // a bare link) would otherwise be held, and wrapped and ordered again on every push, until the line ended. The oldest
+  // is then let out with its end in the paragraph's direction, the only place the stream can differ from the final
+  // render, and only for such rows.
   function earlyPara(text, cw) {
-    if (!pl) pl = { at: 0, runs: [], dir: null, begun: false };
+    if (!pl) pl = { at: 0, runs: [], dir: null, begun: false, before: undefined };
     if (pl.dir === null) pl.dir = lineDirection(text, forced, false);
     const P = parseInline(text, { final: false, from: pl.at });
     let region = pl.runs.concat(cutRuns(P.runs, 0, P.stableR));
@@ -974,9 +1073,10 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
     const dir = pl.dir || lineDirection(text, forced, true);
     pl.at = P.stable;
     let rows = null;
-    const release = (vrows, starts, last) => {
+    const release = (ordered, starts, last) => {
       if (!pl.begun) { begin("para"); pl.begun = true; }
-      for (let j = 0; j < last; j++) emit(vrows[j]);
+      for (let j = 0; j < last; j++) emit(ordered.lines[j]);
+      pl.before = ordered.context[last];
       region = cutRuns(region, starts[last], Infinity);
     };
     if (pl.dir !== null && region.length) {
@@ -986,28 +1086,40 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
         // The pending text starts a new word: one wrap of everything decides which rows are final and shows the rest.
         const all = region.concat(pending);
         const lrows = wrapLogical(paintRuns(all, 0), cw, {});
-        const vrows = visualRows(lrows, dir, cw);
+        const vrows = visualRows(lrows, dir, cw, pl.before);
         const starts = rowStarts(all.map(r => r.t).join(""), lrows);
         // A plain word can only get wider, so a row it did not fit on is final even while the word is unfinished;
         // one that holds markup characters may shrink (a ** pair, an entity), so then only the stable text counts.
         const word = pending.length ? pending.map(r => r.t).join("").split(/\s/, 1)[0] : "";
         const wordStart = all.reduce((n, r, i) => (i < region.length ? n + r.t.length : n), 0);
         const plainWord = word !== "" && !/[\\&*_~`[<!]/.test(word);
-        let last = 0;
-        while (last + 1 < starts.length && (plainWord ? starts[last + 1] <= wordStart : starts[last + 1] < regionLen)) last++;
-        if (last > 0) release(vrows, starts, last);
-        rows = vrows.slice(last);
+        let ready = 0;
+        while (ready + 1 < starts.length && (plainWord ? starts[ready + 1] <= wordStart : starts[ready + 1] < regionLen)) ready++;
+        // Those rows hold stable text only, and the stable text wrapped on its own gives the same rows.
+        let last = ready, from = vrows;
+        if (last > 0) {
+          const stable = visualRows(wrapLogical(paintRuns(trimmed, 0), cw, {}), dir, cw, pl.before, true);
+          last = Math.min(ready, stable.settled);
+          // More than HOLD_ROWS rows wait for that letter: the oldest go out as the stable text alone orders them, their
+          // ends in the paragraph's direction. Not as the text still arriving orders them: a link being typed is plain
+          // letters now and one neutral isolate once it is complete.
+          if (ready - HOLD_ROWS > last) { last = ready - HOLD_ROWS; from = stable; }
+        }
+        if (last > 0) release(from, starts, last);
+        rows = vrows.lines.slice(last);
       } else {
         const lrows = wrapLogical(paintRuns(trimmed, 0), cw, {});
         if (lrows.length >= 2) {
-          release(visualRows(lrows, dir, cw), rowStarts(trimmed.map(r => r.t).join(""), lrows), lrows.length - 1);
+          const ordered = visualRows(lrows, dir, cw, pl.before, true);
+          const last = Math.max(Math.min(lrows.length - 1, ordered.settled), lrows.length - 1 - HOLD_ROWS);
+          if (last > 0) release(ordered, rowStarts(trimmed.map(r => r.t).join(""), lrows), last);
         }
       }
     }
     pl.runs = region;
     if (rows === null) {
       const tail = paintRuns(region.concat(pending), 0);
-      rows = tail === "" ? [] : visualRows(wrapLogical(tail, cw, {}), dir, cw);
+      rows = tail === "" ? [] : visualRows(wrapLogical(tail, cw, {}), dir, cw, pl.before).lines;
     }
     // The blank line that will precede the paragraph is part of what is pending until its first row is released.
     if (rows.length && !pl.begun && wantBlank("para", false)) rows = ["", ...rows];
@@ -1024,7 +1136,7 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
         lead("head");
         if (d.text.trim() !== "") rows.push(...headingRows(d.level, d.text.trim(), cw));
         return rows;
-      case "hr": lead("hr"); rows.push(c.dim(hline(cw))); return rows;
+      case "hr": lead("hr"); rows.push(c.gray(hline(cw))); return rows;
       case "quote": lead("quote"); rows.push(...quoteRows(d.depth, d.text, cw)); return rows;
       case "item": {
         const plan = planItem(d.ind, d.marker, d.rest);
@@ -1032,7 +1144,7 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
         rows.push(...itemRows(plan, cw));
         return rows;
       }
-      case "tablecand": return [c.dim(clip(text.trim(), cw))];
+      case "tablecand": return [rawRow(text, cw)];
       default:
         if (list.length && d.ind > 0) {
           lead("list");
@@ -1062,9 +1174,9 @@ export function createEngine({ getWidth, indent = "", dir = "auto" }) {
           tail = !fence.begun && wantBlank("code", fence.pad > 0) ? ["", ...rows] : rows;
         }
       } else if (mode === "table") {
-        tail = [...tbl.raw.slice(-3), text].filter(x => x.trim() !== "").map(x => c.dim(clip(x.trim(), cw)));
+        tail = [...tbl.raw.slice(-3), text].filter(x => x.trim() !== "").map(x => rawRow(x, cw));
       } else {
-        if (held !== null) tail.push(c.dim(clip(held.trim(), cw)));
+        if (held !== null) tail.push(rawRow(held, cw));
         if (text.trim() !== "") {
           if (held === null && isPlainStart(text)) tail.push(...earlyPara(text, cw));
           else tail.push(...tentative(text, cw));

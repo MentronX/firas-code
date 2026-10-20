@@ -228,6 +228,16 @@ test("repairMessages leaves a valid history alone and fixes the common breakages
   assertValidHistory(broken.messages);
   const results = broken.messages[2].content.map(b => b.tool_use_id);
   assert.deepEqual(results.sort(), ["a", "b"]);
+
+  // A null block inside an array is dropped by normalized(); changed must be true so the caller
+  // uses the cleaned messages instead of the original array that still holds the null.
+  const withNull = repairMessages([
+    { role: "user", content: [{ type: "text", text: "a" }] },
+    { role: "assistant", content: [{ type: "text", text: "ok" }, null] },
+  ]);
+  assert.equal(withNull.changed, true);
+  assert.equal(withNull.messages[1].content.length, 1);
+  assert.equal(withNull.messages[1].content[0].text, "ok");
 });
 
 // ------------------------------------------------------------------------------------------ thinking is not kept

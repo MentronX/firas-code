@@ -11,10 +11,14 @@ test("only the classic Windows console on a real terminal is touched", () => {
   assert.equal(shouldFixConsoleFont({ platform: "darwin", env: {}, stdout: tty }), false);
   assert.equal(shouldFixConsoleFont({ platform: "win32", env: {}, stdout: { isTTY: false } }), false, "a pipe has no font");
   assert.equal(shouldFixConsoleFont({ platform: "win32", env: {}, stdout: null }), false);
-  for (const env of [{ WT_SESSION: "1" }, { TERM_PROGRAM: "vscode" }, { ConEmuANSI: "ON" }, { TERM: "xterm-256color" }, { WEZTERM_EXECUTABLE: "x" }]) {
+  for (const env of [{ WT_SESSION: "1" }, { TERM_PROGRAM: "vscode" }, { ConEmuANSI: "ON" }, { WEZTERM_EXECUTABLE: "x" }]) {
     assert.equal(isModernTerminal(env), true, JSON.stringify(env));
     assert.equal(shouldFixConsoleFont({ platform: "win32", env, stdout: tty }), false, "modern terminals pick a fallback font themselves");
   }
+  // TERM is set by MSYS/Cygwin whatever window they run in, so on Windows it is not evidence of a modern
+  // terminal; off Windows it is.
+  assert.equal(isModernTerminal({ TERM: "xterm-256color" }, "win32"), false);
+  assert.equal(isModernTerminal({ TERM: "xterm-256color" }, "linux"), true);
   for (const value of ["keep", "KEEP", "off", "0", "no"]) {
     assert.equal(shouldFixConsoleFont({ platform: "win32", env: { FIRAS_FONT: value }, stdout: tty }), false, value);
   }

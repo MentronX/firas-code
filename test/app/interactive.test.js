@@ -172,7 +172,7 @@ test("a long result is folded; Ctrl+O prints it in full", () => {
   ui.toolEnd({ id: "b", name: "Bash", ok: true, summary: "Done", body });
   const before = text(screen);
   assert.ok(before.includes("output line 8") && !before.includes("output line 9"));
-  assert.match(before, /\+22 \(Ctrl\+O to expand\)/);
+  assert.match(before, /\+22 lines \(Ctrl\+O to expand\)/);
   screen.ctrl("o");
   const after = text(screen);
   assert.ok(after.includes("output line 30"));

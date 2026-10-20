@@ -32,7 +32,9 @@ async function readLargeLines(abs, offset, limit) {
     const { bytesRead } = await handle.read(head, 0, head.length, 0);
     const sniff = sniffFile(head.subarray(0, bytesRead));
     if (sniff.kind !== "text") return { sniff };
-    if ((head[0] === 0xff && head[1] === 0xfe) || (head[0] === 0xfe && head[1] === 0xff)) return { tooLargeUtf16: true };
+    // A BOM is not the only way UTF-16 arrives: a file saved without one is still UTF-16, and decoding it
+    // as UTF-8 would return NUL-interleaved garbage. decodeText's NUL distribution catches both.
+    if (decodeText(head.subarray(0, bytesRead)).encoding !== "utf8") return { tooLargeUtf16: true };
     const decoder = new StringDecoder("utf8");
     const chunk = Buffer.allocUnsafe(1 << 20);
     const lines = [];

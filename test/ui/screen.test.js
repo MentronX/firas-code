@@ -8,10 +8,10 @@ setArabicMode("on");
 
 const MODERN = { WT_SESSION: "x", TERM: "xterm-256color" };
 
-function make({ cols = 30, rows = 8, env = MODERN, platform = "linux", clock = fakeClock() } = {}) {
+function make({ cols = 30, rows = 8, env = MODERN, platform = "linux", stripMarks, clock = fakeClock() } = {}) {
   const { out, vt } = fakeTTY({ cols, rows });
   const sin = fakeStdin();
-  const screen = createScreen({ stdin: sin, stdout: out, env, platform, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
+  const screen = createScreen({ stdin: sin, stdout: out, env, platform, stripMarks, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
   return { screen, out, vt, sin, clock };
 }
 
@@ -123,16 +123,17 @@ test("marks the text layer counts as zero columns are counted as one so a line c
   const shadda = String.fromCharCode(0x651);
   const beh = String.fromCharCode(0x628);
   const full = "x".repeat(19) + beh + shadda; // 20 columns by our count, 21 by a console that gives the mark a cell
-  assert.equal(fitLine(full, 20), "x".repeat(19) + "\x1b[0m", "no blanks to give up: the line is cut one column short");
-  assert.equal(fitLine(beh + shadda, 20), beh + shadda);
+  assert.equal(fitLine(full, 20, "win32"), "x".repeat(19) + "\x1b[0m", "no blanks to give up: the line is cut one column short");
+  assert.equal(fitLine(beh + shadda, 20, "win32"), beh + shadda);
   const padded = " ".repeat(18) + beh + shadda + beh; // right-aligned: 20 wide by our count
-  assert.equal(fitLine(padded, 20), " ".repeat(17) + beh + shadda + beh, "a leading blank makes room");
+  assert.equal(fitLine(padded, 20, "win32"), " ".repeat(17) + beh + shadda + beh, "a leading blank makes room");
   const styled = "\x1b[2m" + " ".repeat(10) + "\x1b[22m";
-  assert.equal(fitLine(styled, 20), styled, "lines without marks are left alone");
+  assert.equal(fitLine(styled, 20, "win32"), styled, "lines without marks are left alone");
   const twice = " ".repeat(18) + beh + shadda + beh + shadda;
-  assert.equal(fitLine(twice, 20), " ".repeat(16) + beh + shadda + beh + shadda);
-  assert.equal(fitLine("x".repeat(40), 20), "x".repeat(20) + "\x1b[0m");
-  const { screen, vt } = make({ cols: 20 });
+  assert.equal(fitLine(twice, 20, "win32"), " ".repeat(16) + beh + shadda + beh + shadda);
+  assert.equal(fitLine("x".repeat(40), 20, "win32"), "x".repeat(20) + "\x1b[0m");
+  assert.equal(fitLine(full, 20, "linux"), full, "off Windows a mark is zero-width, so the line fits");
+  const { screen, vt } = make({ cols: 20, platform: "win32", stripMarks: false });
   screen.setLive([full, padded], null);
   assert.deepEqual(vt.all(), ["x".repeat(19), " ".repeat(17) + beh + shadda + beh]);
   screen.dispose();
@@ -403,9 +404,9 @@ test("title and process hooks", () => {
   const before = { exit: process.listenerCount("exit"), unc: process.listenerCount("uncaughtException"), int: process.listenerCount("SIGINT") };
   const a = make();
   const b = make();
-  assert.equal(process.listenerCount("exit"), before.exit + 1);
-  assert.equal(process.listenerCount("uncaughtException"), before.unc + 1);
-  assert.equal(process.listenerCount("SIGINT"), before.int + 1);
+  // The hooks are process-wide and installed once. Their presence is proved below by finding the
+  // exit hook and watching it restore both screens; a raw listener count is order-dependent because
+  // an earlier test may have left the registry installed.
   a.screen.title("Firas\x1b]2;evil\x07 Code");
   assert.equal(a.vt.title, "Firas ]2;evil  Code");
   // the exit hook restores every live screen

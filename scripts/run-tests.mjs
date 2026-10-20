@@ -23,5 +23,10 @@ if (!files.length) {
 }
 const filter = process.argv[2];
 const picked = filter ? files.filter(f => f.includes(filter)) : files;
-const res = spawnSync(process.execPath, ["--test", ...picked], { stdio: "inherit", cwd: root });
+// The UI tests describe the modern-terminal glyphs. A test runner on Windows has no WT_SESSION, so the
+// app would otherwise pick the classic-console set and the expectations would compare different symbols.
+const res = spawnSync(process.execPath, ["--test", ...picked], {
+  stdio: "inherit", cwd: root,
+  env: { ...process.env, FIRAS_GLYPHS: process.env.FIRAS_GLYPHS || "full" },
+});
 process.exit(res.status ?? 1);

@@ -10,8 +10,12 @@
 //  - A line over LONG_LINE characters is left unpainted: it is minified or generated, and colouring it costs more
 //    than it helps.
 //  - Colours come from theme.js only: keywords accent, strings green, numbers yellow, comments gray italic, types blue,
-//    functions and keys soft accent, constants magenta.
-import { c, colorLevel } from "./theme.js";
+//    functions and keys soft accent, constants magenta, variables ($x, @x, $env:X) red. Red is the one hue no other
+//    class uses, so a variable never takes the colour of what stands next to it ($x = true, -Path $env:TEMP, FOO=1,
+//    :sym @x); a diff's deleted line is red too, but a diff has no variables.
+//  - Comments are gray, and italic only where the terminal draws italic: on the classic console theme.js turns italic
+//    into the soft accent, which inside the gray would win and paint every comment the colour of a function name.
+import { c, colorLevel, textEffects } from "./theme.js";
 
 const R = String.raw;
 const LONG_LINE = 4000;
@@ -21,11 +25,12 @@ const PAINT = {
   kw: s => c.accent(s),
   str: s => c.green(s),
   num: s => c.yellow(s),
-  com: s => c.gray(c.italic(s)),
+  com: s => (textEffects() ? c.gray(c.italic(s)) : c.gray(s)),
   type: s => c.blue(s),
   fn: s => c.accentSoft(s),
   prop: s => c.accentSoft(s),
   lit: s => c.magenta(s),
+  var: s => c.red(s),
   tag: s => c.accent(s),
   attr: s => c.blue(s),
   rx: s => c.magenta(s),

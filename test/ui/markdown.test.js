@@ -315,7 +315,7 @@ test("untrusted text: escapes, control and bidi characters never reach the outpu
     assert.equal(out.includes(String.fromCharCode(0x2066)), false);
   }
   assert.deepEqual(plain("a\x1b[31mb", { width: 80 }), ["ab"]);
-  assert.equal(cleanText("x" + String.fromCharCode(0xd83d) + "y"), "x�y", "a lone surrogate becomes U+FFFD");
+  assert.equal(cleanText("x" + String.fromCharCode(0xd83d) + "y"), "x" + String.fromCharCode(0xfffd) + "y", "a lone surrogate becomes U+FFFD");
   assert.equal(cleanText("a\tb"), "a   b");
   assert.deepEqual(plain("one\ttwo", { width: 80 }), ["one two"], "a tab moves to the next multiple of 4");
 });
@@ -460,7 +460,7 @@ test("the ASCII fallback draws everything with plain characters", async () => {
     "const out = [...renderMarkdown(doc, { width: 40 }), ...renderDiff({ path: 'f', oldText, newText }, { width: 40, context: 1 })];",
     "console.log(JSON.stringify(out));",
   ].join("\n");
-  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script, JSON.stringify(payload)], { env: { ...process.env, FIRAS_ASCII: "1", NO_COLOR: "1" }, encoding: "utf8" });
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script, JSON.stringify(payload)], { env: { ...process.env, FIRAS_GLYPHS: "ascii", FIRAS_ASCII: "1", NO_COLOR: "1" }, encoding: "utf8" });
   assert.equal(run.status, 0, run.stderr);
   const out = JSON.parse(run.stdout);
   assert.ok(out.length > 20);

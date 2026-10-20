@@ -21,6 +21,8 @@
 //  - layoutParagraph picks the direction of "auto" paragraphs by the first strong letter, except when that letter
 //    is Latin but Arabic/Hebrew letters outnumber Latin ones (a product name leading an Arabic sentence): that is an
 //    RTL paragraph. baseDirection() itself is the plain UAX #9 rule.
+//  - The rows of a wrapped paragraph are ordered one by one but resolved with the text around them (orderRows): the
+//    neutrals a break leaves at the edge of a row take the direction they have in the whole paragraph.
 //  - align: "end"/"right" pads on the left, "center" splits the padding, "start"/"left"/"none" never pad. "end" means the
 //    right edge whatever the direction; toVisual only pads LTR-only lines when dir is explicitly "rtl".
 //  - Escape sequences are passed through (styles, links, other complete sequences); truncated or garbled ones are
@@ -30,7 +32,7 @@ import { stripAnsi, hasAnsi, transition } from "./ansi.js";
 import { analyze, wrapCells, wrapLogicalWith } from "./wrap.js";
 import { stringWidth as measure, isCombining } from "./width.js";
 import { hasArabic } from "./arabic.js";
-import { bidiClass, resolveParagraph, visualOrder, mirrorOf, firstStrongDirection, L, R, AL, AN, ES, ET, CS, ON, WS, S, B, LRE, PDF, PDI } from "./bidi.js";
+import { bidiClass, resolveParagraph, visualOrder, mirrorOf, firstStrongDirection, L, R, AL, EN, AN, ES, ET, CS, ON, WS, S, B, LRE, PDF, LRI, RLI, FSI, PDI } from "./bidi.js";
 
 export { stripAnsi };
 
@@ -149,7 +151,47 @@ function bindLatinWords(types, cps) {
   }
 }
 
-function reorderRange(cells, a, b, dir) {
+// No strong letter: the paragraph's own direction stands for the text around a row.
+const NONE = -1;
+// Left-to-right text followed by an Arabic-Indic number ("--retries ٣"): to the neutrals after it that number is
+// right-to-left (N1), while a European number after it still follows the left-to-right letter (W7). No single letter
+// says both, so it stands in as a pair.
+const L_AN = -2;
+// The letters standing in for the text around a row (see orderRows): one of each strong class, and the pair above.
+const STAND_IN = new Map([[L, [[L, 0x61]]], [R, [[R, 0x5d0]]], [AL, [[AL, 0x627]]], [L_AN, [[L, 0x61], [AN, 0x661]]]]);
+
+/**
+ * Resolves one row of a longer paragraph. `edge` = { before, after, at }: the strong class of the text before the row
+ * and after it (NONE at the paragraph's own start and end), and the cell where the row's text starts (after its indent).
+ * The algorithm sees a stand-in letter of each class there, so the neutrals at the row's edges are resolved as they
+ * would be in the whole paragraph; the levels of the stand-ins themselves are thrown away.
+ */
+function resolveRow(types, cps, dir, edge) {
+  const m = types.length;
+  const at = Math.min(edge.at, m);
+  const before = edge.before === NONE ? [] : STAND_IN.get(edge.before);
+  const pre = before.length;
+  const post = edge.after === NONE ? 0 : 1;
+  const T = new Uint8Array(m + pre + post);
+  const C = new Array(m + pre + post);
+  for (let i = 0; i < m; i++) { const j = i < at ? i : i + pre; T[j] = types[i]; C[j] = cps[i]; }
+  before.forEach(([type, cp], i) => { T[at + i] = type; C[at + i] = cp; });
+  if (post) { T[m + pre] = edge.after; C[m + pre] = STAND_IN.get(edge.after)[0][1]; }
+  const r = resolveParagraph(T, C, dir);
+  const levels = new Uint8Array(m);
+  const removed = new Uint8Array(m);
+  for (let i = 0; i < m; i++) { const j = i < at ? i : i + pre; levels[i] = r.levels[j]; removed[i] = r.removed[j]; }
+  // L1 again: the stand-in after the row hid the row's trailing blanks from it, and they go back to the paragraph level.
+  for (let i = m - 1; post && i >= 0; i--) {
+    if (removed[i]) continue;
+    const t = types[i];
+    if (t === WS || t === S || t === B || t === LRI || t === RLI || t === FSI || t === PDI) levels[i] = r.paraLevel;
+    else break;
+  }
+  return { levels, removed, paraLevel: r.paraLevel };
+}
+
+function reorderRange(cells, a, b, dir, edge) {
   const m = b - a;
   const types = new Uint8Array(m);
   const cps = new Array(m);
@@ -159,7 +201,7 @@ function reorderRange(cells, a, b, dir) {
     types[i] = bidiClass(cp);
   }
   bindLatinWords(types, cps);
-  const r = resolveParagraph(types, cps, dir);
+  const r = edge && (edge.before !== NONE || edge.after !== NONE) ? resolveRow(types, cps, dir, edge) : resolveParagraph(types, cps, dir);
   // Direction marks and isolates take part in the ordering but are invisible once the line is ordered.
   // A combining mark with no base of its own would glue itself to whatever lands in front of it.
   const hidden = i => isBidiControl(cps[i]) || (cells[a + i].w === 0 && isCombining(cps[i]));
@@ -215,22 +257,113 @@ function padPlain(line, dir, how, width) {
 /**
  * Shapes and reorders ONE logical line for a terminal that does neither.
  * o: { dir = 'auto'|'ltr'|'rtl', width, align = 'none'|'start'|'end' }
+ * A line of a right-to-left paragraph is reordered even when it holds no right-to-left letter (a wrapped link or
+ * number): its leading indent and the punctuation at its ends belong to the paragraph's direction, so they move to the
+ * other side ("  path." is drawn ".path  "), exactly as in the rows around it. The line is a paragraph of its own; the
+ * rows of a wrapped paragraph go through orderRows, which gives each one the text around it.
  */
 export function toVisual(line, o) {
+  return visualLine(line, o, null);
+}
+
+function visualLine(line, o, edge) {
   const dir = (o && o.dir) || "auto";
   const how = (o && o.align) || "none";
   const width = o && o.width;
-  if (line.indexOf("\n") !== -1) return line.split("\n").map(l => toVisual(l, o)).join("\n");
+  if (line.indexOf("\n") !== -1) return line.split("\n").map(l => visualLine(l, o, edge)).join("\n");
   if (!arabicActive()) return padPlain(line, dir, how, width);
-  if (!RTL_QUICK.test(line)) return padPlain(dropIsolates(line), dir, how, width);
+  const forced = dir === "rtl";
+  if (!forced && !RTL_QUICK.test(line)) return padPlain(dropIsolates(line), dir, how, width);
   const cr = line.charCodeAt(line.length - 1) === 13;
   const body = cr ? line.slice(0, -1) : line;
   const model = analyze(body, true);
   // The quick test also sees text inside escape sequences; what matters is the text that will be drawn.
-  if (!model.cells.length || !RTL_QUICK.test(model.src)) return padPlain(dropIsolates(line), dir, how, width);
-  const { order, levels } = reorderRange(model.cells, 0, model.cells.length, dirNumber(dir));
+  if (!model.cells.length || (!forced && !RTL_QUICK.test(model.src))) return padPlain(dropIsolates(line), dir, how, width);
+  const { order, levels } = reorderRange(model.cells, 0, model.cells.length, dirNumber(dir), edge);
   const r = emit(model, 0, order, levels);
   return place(withTail(model, r), r.width, width, how) + (cr ? "\r" : "");
+}
+
+// The first strong letter or number of a row and its last strong letter, outside its isolates (to the text around it an
+// isolate is one neutral, whatever it holds); `tail`: the kind of number (EN or AN) that comes last after that letter.
+function rowEdges(row) {
+  const t = hasAnsi(row) ? stripAnsi(row) : row;
+  let depth = 0, first = NONE, last = NONE, tail = NONE;
+  for (const ch of t) {
+    const c = bidiClass(ch.codePointAt(0));
+    if (c === LRI || c === RLI || c === FSI) depth++;
+    else if (c === PDI) { if (depth > 0) depth--; }
+    else if (depth === 0) {
+      if (c === L || c === R || c === AL) { last = c; tail = NONE; if (first === NONE) first = c; }
+      else if (c === EN || c === AN) { tail = c; if (first === NONE) first = c; }
+    }
+  }
+  return { first, last, tail };
+}
+
+// What the rows up to and including one leave to the row after it: their last strong letter, or the pair L_AN when an
+// Arabic-Indic number follows a left-to-right letter. A European number after left-to-right text is left-to-right
+// itself (W7), so after one the text is plain L again.
+function leaves(edges, before) {
+  const last = edges.last !== NONE ? edges.last : before;
+  if (last !== L && last !== L_AN) return last;
+  return edges.tail === AN ? L_AN : edges.tail === EN ? L : last;
+}
+
+// What a row's end meets: the class of the first strong letter or number after it, as the neutrals before it see it.
+// A European number counts as a left-to-right letter after left-to-right text (W7) and as a right-to-left one otherwise.
+function meets(next, lastBefore, rtl) {
+  if (next === NONE || next === L) return next;
+  if (next === EN) return lastBefore === L || lastBefore === L_AN || (lastBefore === NONE && !rtl) ? L : R;
+  return R;
+}
+
+const cellsOf = s => (s ? analyze(s, true).cells.length : 0);
+
+/**
+ * Visual lines for the wrapped rows of ONE paragraph (what wrapLogical returned for it).
+ * UAX #9 resolves a paragraph as a whole and only orders it line by line; ordered on its own, every row would take the
+ * paragraph's direction at both of its ends, and a "&&", "|" or "2>&1" that a break left at the edge of a row in the
+ * middle of a command jumped to the other end of the row, mirrored. So each row is resolved with the text around it:
+ * the last strong letter of the rows above, the first strong letter or number of the rows below. The paragraph's first
+ * row has nothing before it and its last row nothing after it, so there the paragraph's direction stays (the full stop
+ * of an Arabic sentence that ends in a path is drawn on the path's left). An indent belongs to the paragraph whatever
+ * the text next to it, so the text before a row is put after the row's indent.
+ * o: { dir = 'ltr'|'rtl', width, align, firstIndent = "", indent = "", before, open = false }
+ *   before: context[k] of an earlier call, when these rows continue a paragraph whose first k rows are out already.
+ *   open:   more of the paragraph will follow, not known yet (a stream); its last rows may then still change.
+ * Returns { lines, settled, context }: `settled` rows from the top look the same whatever follows (all of them unless
+ * `open`); context[k] is what the rows above row k leave to it.
+ */
+export function orderRows(rows, o) {
+  const n = rows.length;
+  const dir = o && o.dir;
+  const opts = { dir, width: o && o.width, align: o && o.align };
+  const rtl = dir === "rtl";
+  const context = new Array(n + 1).fill(o && o.before !== undefined ? o.before : NONE);
+  if (!arabicActive()) return { lines: rows.slice(), settled: n, context };
+  const edges = rows.map(rowEdges);
+  for (let k = 0; k < n; k++) context[k + 1] = leaves(edges[k], context[k]);
+  // A left-to-right paragraph with no right-to-left letter is not reordered at all; with no fixed direction every row
+  // is a paragraph of its own.
+  if (!rtl && (dir !== "ltr" || !rows.some(r => RTL_QUICK.test(r)))) {
+    return { lines: rows.map(r => toVisual(r, opts)), settled: n, context };
+  }
+  const atFirst = cellsOf(o && o.firstIndent), atRest = cellsOf(o && o.indent);
+  const lines = new Array(n);
+  let settled = n;
+  let next = NONE;
+  for (let k = n - 1; k >= 0; k--) {
+    const edge = { before: context[k], after: meets(next, context[k + 1], rtl), at: k ? atRest : atFirst };
+    lines[k] = visualLine(rows[k], opts, edge);
+    if (o && o.open && next === NONE) {
+      // Nothing strong below this row yet: the text that decides how its end looks may still be on its way.
+      const asL = visualLine(rows[k], opts, { ...edge, after: L });
+      if (asL !== visualLine(rows[k], opts, { ...edge, after: R })) settled = k;
+    }
+    if (edges[k].first !== NONE) next = edges[k].first;
+  }
+  return { lines, settled, context };
 }
 
 // Whatever style the logical line ended in (even an unclosed one) is the style the visual line must end in.
@@ -249,7 +382,8 @@ export function shapeLine(line) {
 
 /**
  * Wraps `text` to `width` columns and returns visual lines ready to print.
- * o: { dir = 'auto', align = 'auto', firstIndent = "", indent = "" }. Blank lines are kept.
+ * o: { dir = 'auto', align = 'auto', firstIndent = "", indent = "", before }. Blank lines are kept. `before`: when the
+ * text continues a paragraph whose first rows are out already, what those rows leave to it (orderRows' context).
  */
 export function layoutParagraph(text, width, o) {
   const dir = (o && o.dir) || "auto";
@@ -265,13 +399,14 @@ export function layoutParagraph(text, width, o) {
     if (!active) { out.push(...wrapLogical(para, width, opts)); return; }
     const d = dir !== "auto" ? dir : (RTL_QUICK.test(para) && hasRtl(para) ? paragraphDirection(para) : "ltr");
     const how = alignOpt === "auto" ? (d === "rtl" ? "end" : "start") : alignOpt;
-    for (const line of wrapLogical(para, width, opts)) out.push(toVisual(line, { dir: d, width, align: how }));
+    const before = k === 0 && o ? o.before : undefined;
+    out.push(...orderRows(wrapLogical(para, width, opts), { dir: d, width, align: how, ...opts, before }).lines);
   });
   return out;
 }
 
 function mapLine(plain, o) {
-  if (!arabicActive() || !RTL_QUICK.test(plain)) {
+  if (!arabicActive() || (!(o && o.dir === "rtl") && !RTL_QUICK.test(plain))) {
     // Same characters as toVisual prints: it drops isolates from a line it does not reorder (while Arabic is on).
     const drop = arabicActive();
     const ident = [];

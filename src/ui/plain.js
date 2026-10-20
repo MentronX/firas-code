@@ -11,21 +11,28 @@
 //    request that is not high risk (the engine never sends one, but a custom engine might): that is allowed.
 //  - Questions and plans cannot be answered. The model is told so through the normal tool results ("dismissed") and,
 //    for a plan, through the feedback text, so a print-mode run in plan mode ends with the plan as its answer.
-//  - Nothing but the answer goes to stdout, and a pipe or a file never gets an escape sequence. stderr lines are shaped
-//    and ordered for Arabic only when stderr is a terminal (a redirected log keeps logical text).
+//  - Nothing but the answer goes to stdout, and a pipe or a file never gets an escape sequence. That holds for a
+//    redirected stderr too, which loses its colours here: the colour level is decided from stdout (cli.js), so
+//    `2> log` beside a terminal stdout would fill the log with them. stderr lines are shaped and ordered for Arabic
+//    only when stderr is a terminal (a redirected log keeps logical text).
+//  - What reaches a Windows terminal loses its combining marks (src/ui/terminal.js markFilter): the console host gives
+//    each one a cell the layout never gave out, and a right-aligned Arabic row would wrap.
 //  - On a terminal an answer block is rendered when the block ends, not token by token: that is what makes wrapping and
 //    right-to-left lines correct. `answer()` always returns the raw text.
 //  - Text blocks are separated by a blank line; the stream always ends with a newline (finish()).
 import { c, sym } from "./theme.js";
 import { t } from "../i18n/index.js";
-import { toVisual } from "../text/display.js";
+import { stripAnsi, toVisual } from "../text/display.js";
 import { renderMarkdown } from "./markdown.js";
+import { markFilter } from "./terminal.js";
 import { stripBidiMarks } from "./textfit.js";
 import { cleanText, createStreamCleaner, truncateLogical } from "./views.js";
 import "./strings-app.js";
 
-export function createPlainUi({ stdout = process.stdout, stderr = process.stderr, mode = "default" } = {}) {
+export function createPlainUi({ stdout = process.stdout, stderr = process.stderr, mode = "default", platform = process.platform, env = process.env } = {}) {
   const pretty = !!stdout.isTTY;
+  const outSafe = markFilter({ platform, env, stream: stdout });
+  const errSafe = markFilter({ platform, env, stream: stderr });
   const cleaner = () => createStreamCleaner({ tabs: 0 });
   let blockCleaner = cleaner();
   let block = "";
@@ -36,12 +43,12 @@ export function createPlainUi({ stdout = process.stdout, stderr = process.stderr
 
   const out = text => {
     if (!text) return;
-    stdout.write(text);
+    stdout.write(outSafe(text));
     wrote = true;
     lastChar = text[text.length - 1];
   };
   const err = line => {
-    const text = stderr.isTTY ? stripBidiMarks(toVisual(line, { dir: "auto" })) : stripBidiMarks(line);
+    const text = stderr.isTTY ? errSafe(stripBidiMarks(toVisual(line, { dir: "auto" }))) : stripAnsi(stripBidiMarks(line));
     stderr.write(text + "\n");
   };
 
@@ -71,7 +78,7 @@ export function createPlainUi({ stdout = process.stdout, stderr = process.stderr
     },
 
     toolStart({ name, summary }) {
-      err(`${c.gray(sym.bullet)} ${c.bold(name)}${c.dim("(")}${truncateLogical(cleanText(summary), 100)}${c.dim(")")}`);
+      err(`${c.gray(sym.bullet)} ${c.bold(name)}${c.dim(`(${truncateLogical(cleanText(summary), 100)})`)}`);
     },
     toolEnd({ ok, summary }) {
       const text = truncateLogical(cleanText(summary || ""), 120);
@@ -100,8 +107,9 @@ export function createPlainUi({ stdout = process.stdout, stderr = process.stderr
     },
     turnEnd() {
       if (!todos?.length) return;
+      // The same marks as the interactive task list: done, still running when the turn ended, not started.
       for (const item of todos) {
-        const mark = item.status === "completed" ? sym.checked : sym.checkbox;
+        const mark = item.status === "completed" ? c.green(sym.checked) : item.status === "in_progress" ? c.accent(sym.active) : c.gray(sym.checkbox);
         err(`  ${mark} ${truncateLogical(cleanText(item.content), 100)}`);
       }
       todos = null;

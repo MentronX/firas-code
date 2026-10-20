@@ -18,6 +18,8 @@ import { createTodoTool } from "./todo.js";
 import { createAskUserTool } from "./askuser.js";
 import { createExitPlanTool } from "./exitplan.js";
 import { createLibraryTool } from "./library.js";
+import { createSkillTool } from "./skill.js";
+import { asSkillSource, createSkillSource } from "../skills/index.js";
 import { createJobs } from "./jobs.js";
 import { resolveShell } from "./shell.js";
 import { reveal } from "./common.js";
@@ -31,7 +33,7 @@ export { guardPath, isSecretPath, isSystemPath } from "./pathguard.js";
 export const shellInfo = resolveShell();
 
 /** Tools that cannot change anything on the machine: the set an exploring sub-agent may use. */
-export const READ_ONLY_TOOL_NAMES = Object.freeze(["Read", "Glob", "Grep", "LS", "WebFetch", "BashOutput", "UiLibrary"]);
+export const READ_ONLY_TOOL_NAMES = Object.freeze(["Read", "Glob", "Grep", "LS", "WebFetch", "BashOutput", "UiLibrary", "Skill"]);
 
 /** Whatever a tool puts in a card header, text the model wrote included, shows hidden characters spelled out. */
 function revealSummaries(tool) {
@@ -43,18 +45,23 @@ function revealSummaries(tool) {
 const REQUIRED = ["name", "description", "input_schema", "run", "permission"];
 
 /**
- * createToolbox({ cwd, ui, client, config, session, mode, extraTools, shell?, jobs?, permissions?, webFetch? })
+ * createToolbox({ cwd, ui, client, config, session, mode, extraTools, shell?, jobs?, permissions?, webFetch?, skills? })
  *   extraTools  more tools (the sub-agent tool is added this way)
  *   shell       a resolveShell() result; default is the one resolved for this machine
  *   webFetch    { allowLoopback, lookup } test hooks for WebFetch - never reachable from tool input
+ *   skills      what the Skill tool may load: a skill source ({ list(), find() }, see src/skills/index.js), a list of
+ *               skills or a function returning one; default: the skills found for `cwd`. Kept as toolbox.skills, so
+ *               the system prompt lists exactly what the tool can load.
  */
-export function createToolbox({ cwd = process.cwd(), ui, client, config, session, mode = "default", extraTools = [], shell = shellInfo, jobs = createJobs(), permissions, webFetch } = {}) {
+export function createToolbox({ cwd = process.cwd(), ui, client, config, session, mode = "default", extraTools = [], shell = shellInfo, jobs = createJobs(), permissions, webFetch, skills } = {}) {
   const fileState = new Map();
+  const skillSource = skills ? asSkillSource(skills) : createSkillSource(cwd);
   const tools = [
     createReadTool(), createWriteTool(), createEditTool(), createMultiEditTool(),
     createBashTool({ shell, jobs }), createBashOutputTool({ jobs }), createKillShellTool({ jobs }),
     createGlobTool(), createGrepTool(), createLsTool(), createWebFetchTool(webFetch),
     createTodoTool(), createAskUserTool(), createExitPlanTool(), createLibraryTool(),
+    createSkillTool({ getSkills: () => skillSource.list() }),
   ].map(revealSummaries).concat(extraTools);
   const byName = new Map();
   for (const tool of tools) {
@@ -73,6 +80,7 @@ export function createToolbox({ cwd = process.cwd(), ui, client, config, session
     shell,
     jobs,
     fileState,
+    skills: skillSource,
 
     has: name => byName.has(name),
 

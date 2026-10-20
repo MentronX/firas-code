@@ -152,15 +152,15 @@ test("aborting the turn stops the sub-agent and reports it", { timeout: 10000 },
   assert.equal(end.ok, false);
 });
 
-test("a sub-agent stops at 30 steps and says its result may be incomplete", async () => {
-  const e = env({ script: (request, n) => toolReply([{ id: `s${n}`, name: "Read", input: { path: `f${n}` } }], { text: n === 29 ? "last notes" : undefined }) });
+test("a sub-agent stops at 100 steps and says its result may be incomplete", async () => {
+  const e = env({ script: (request, n) => toolReply([{ id: `s${n}`, name: "Read", input: { path: `f${n}` } }], { text: n === 99 ? "last notes" : undefined }) });
   const result = await e.agent.run({ description: "x", prompt: "y" }, e.ctx);
-  assert.equal(SUBAGENT_MAX_STEPS, 30);
-  assert.equal(e.client.calls, 30);
+  assert.equal(SUBAGENT_MAX_STEPS, 100);
+  assert.equal(e.client.calls, 101, "the closing summary request is the 101st call");
   assert.equal(result.ok, true);
   assert.match(result.content, /last notes/);
-  assert.match(result.content, /30-step limit; this result may be incomplete/);
-  assert.match(result.display.summary, /30 tool calls/);
+  assert.match(result.content, /100-step limit; this result may be incomplete/);
+  assert.match(result.display.summary, /100 tool calls/);
 });
 
 test("a failing sub-agent reports a failure instead of throwing", async () => {

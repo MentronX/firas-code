@@ -1,36 +1,52 @@
-// The single animated status line:   ✻ Thinking… (12s · ↑ 3.2k) · esc to interrupt
+// The single animated status line:   ✻ Thinking… (12s · ↑ 3.2k) · Esc to interrupt
 //                                   ✻ يفكر… (12ث · ↑ 3.2k) · Esc للإيقاف
 //
 // Decisions:
 //  - The verb comes from the phase (waiting / thinking / writing / tool) and changes gently every 4 s inside it; the
 //    starting verb differs per run (seeded by the start time) so repeated turns do not all open with the same word.
 //    A caller-supplied label (for example the tool being run) replaces the verb and is shown as given.
-//  - The glyph: on terminals with at least 256 colours the star breathes slowly between two teals; on poorer terminals
-//    it cycles the theme's spinner frames (slowed down for the 4-frame ASCII set). Nothing else on the line moves.
-//  - Time and counters keep Latin digits in both languages; units are s/m/h or ث/د/س. The arrow is "^" when the
-//    terminal cannot draw it. The parenthesis shows once a second has passed or tokens are known.
-//  - Width fitting drops parts in this order: the interrupt hint, the counters, then the verb is cut with an
-//    ellipsis. The text is cut BEFORE it is shaped and ordered, so a line is never a half-reversed fragment.
-//  - In Arabic the line is right-aligned (the glyph sits at the right edge, like every Arabic paragraph); in English it
-//    is left-aligned.
+//  - One ellipsis after the verb or the label, never two: a label that already ends in one keeps it (written in the
+//    glyph tier's form), and a label that ends with a closing bracket gets none - "Stopping (press Ctrl+C again to
+//    leave)…" reads as a stray mark.
+//  - The glyph: in the full glyph tier on terminals with at least 256 colours the star (sym.think) breathes slowly
+//    between two teals. Everywhere else the theme's spinner frames turn (slowed down for the 4-frame sets): the console
+//    tier's star is a plain sun that cannot show motion, and its frames ∙ • ● • can; with 256 colours or more they take
+//    the same breathing colour. Nothing else on the line moves.
+//  - reducedMotion() (src/ui/terminal.js): one glyph, the star, in the plain accent; nothing turns or breathes, and the
+//    clock still ticks (four times a second: it only shows seconds).
+//  - Time and counters keep Latin digits in both languages; units are s/m/h or ث/د/س, the arrow comes from the glyph
+//    tier. The parenthesis shows once a second has passed or tokens are known. In Arabic every number-and-unit run
+//    ("1د", "12ث") and the token count ("↑ 3.2k") sit in their own left-to-right isolates: a run keeps its shape and the
+//    count keeps its arrow in front, while the parts themselves follow the line from the right.
+//  - Width fitting drops parts in this order: the interrupt hint, the counters, then the verb is cut with an ellipsis.
+//    The LOGICAL text is fitted before it is shaped and ordered, so a line is never a half-reversed fragment and an
+//    ordered line is never cut (in Arabic its left columns are the end of the sentence).
+//  - In Arabic the line is right-aligned and the glyph sits at the right edge, where the line starts. The glyph is put
+//    there after the text is ordered: a line with no Arabic letter in it (a tool label once the counters are dropped)
+//    is not reordered at all, and the glyph would otherwise stay on its left.
 //  - now() and the timer are injectable for tests; the timer is unref'd, so a forgotten spinner never keeps the
 //    process alive.
 //  - An ultracode turn (set({ ultra: true })) is the exception to "nothing else moves": the glyph and the verb cycle
 //    through the rainbow and a painted "ultracode" tag sits before the counters (src/ui/ultra.js). The verb is one colour
-//    at a time, so Arabic shaping is untouched; the tag is painted letter by letter on the finished line.
-import { c, sym, hasUnicode, colorLevel, fg, PALETTE } from "./theme.js";
+//    at a time, so Arabic shaping is untouched; the tag is painted letter by letter on the finished line. Under
+//    reducedMotion the rainbow stands still.
+import { c, sym, tier, colorLevel, fg, PALETTE } from "./theme.js";
 import { ULTRA, paintUltra, phaseAt, rainbowSolid } from "./ultra.js";
 import { stringWidth, toVisual } from "../text/display.js";
 import { t } from "../i18n/index.js";
 import { tList, withLang } from "./strings.js";
-import { clipLine } from "./screen.js";
-import { fitLogical, stripBidiMarks } from "./textfit.js";
+import { fitLogical, ltrIsolate, stripBidiMarks } from "./textfit.js";
+import { reducedMotion } from "./terminal.js";
 
 const TICK_MS = 80;
+const STILL_TICK_MS = 250;
 const VERB_MS = 4000;
 const SHIMMER_MS = 2200;
 const PHASES = ["waiting", "thinking", "writing", "tool"];
-const UP = hasUnicode ? "↑" : "^";
+const UP = sym.up;
+// What already ends a label: an ellipsis (three dots or the single glyph) or a closing bracket or quote.
+const ENDS_ELLIPSIS = /(?:\.{2,}|\u2026)+$/;
+const ENDS_CLOSED = /[)\]}\u00bb\u201d\u2019]$/;
 
 const lerp = (a, b, k) => a.map((v, i) => Math.round(v + (b[i] - v) * k));
 
@@ -56,12 +72,29 @@ export function formatTokens(n) {
   return strip((v / 1e6).toFixed(1)) + "m";
 }
 
+/** `text` followed by one ellipsis: never a second one, and none after a closing bracket. */
+function trailed(text) {
+  const s = String(text).trimEnd();
+  if (ENDS_ELLIPSIS.test(s)) return s.replace(ENDS_ELLIPSIS, "").trimEnd() + sym.ellipsis;
+  if (ENDS_CLOSED.test(s)) return s;
+  return s + sym.ellipsis;
+}
+
+/** The breathing teal at time `at`. */
+function breathing(at) {
+  const k = 0.5 - 0.5 * Math.cos(((at % SHIMMER_MS) / SHIMMER_MS) * 2 * Math.PI);
+  const low = lerp(PALETTE.accent, [0, 0, 0], 0.4);
+  const high = lerp(PALETTE.accentSoft, [255, 255, 255], 0.2);
+  return fg(lerp(low, high, k), 36);
+}
+
 /**
- * createSpinner({ onFrame, lang }) -> { start, stop, isRunning, set, line }  
+ * createSpinner({ onFrame, lang }) -> { start, stop, isRunning, set, line }
  * onFrame() is called about every 80 ms while running (the caller redraws the live region); lang() returns "ar" | "en".
- * Extra optional parameters, for tests: now(), setTimer(fn, ms), clearTimer(handle).
+ * Extra optional parameters, for tests: now(), setTimer(fn, ms), clearTimer(handle), still() (reduced motion; by
+ * default reducedMotion() of the environment, read on every frame).
  */
-export function createSpinner({ onFrame = () => {}, lang = () => "en", now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+export function createSpinner({ onFrame = () => {}, lang = () => "en", now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, still = () => reducedMotion() } = {}) {
   let running = false;
   let timer = null;
   let phase = "waiting";
@@ -80,7 +113,7 @@ export function createSpinner({ onFrame = () => {}, lang = () => "en", now = Dat
       } finally {
         if (running && !timer) schedule();
       }
-    }, TICK_MS);
+    }, still() ? STILL_TICK_MS : TICK_MS);
     if (timer && typeof timer.unref === "function") timer.unref();
   }
 
@@ -95,59 +128,64 @@ export function createSpinner({ onFrame = () => {}, lang = () => "en", now = Dat
     if ("ultra" in o) ultra = !!o.ultra;
   }
 
-  function glyph(at) {
-    if (ultra && colorLevel()) {
-      const frames = sym.spinner;
-      const char = colorLevel() >= 2 ? sym.think : frames[Math.floor(Math.max(0, at - startedAt) / TICK_MS / 2) % frames.length];
-      return rainbowSolid(char, phaseAt(at));
-    }
-    if (colorLevel() >= 2) {
-      const k = 0.5 - 0.5 * Math.cos(((at % SHIMMER_MS) / SHIMMER_MS) * 2 * Math.PI);
-      const low = lerp(PALETTE.accent, [0, 0, 0], 0.4);
-      const high = lerp(PALETTE.accentSoft, [255, 255, 255], 0.2);
-      return fg(lerp(low, high, k), 36)(sym.think);
-    }
+  /** Where the rainbow of an ultracode turn is: moving, or held still under reduced motion. */
+  const rainbowPhase = (at, calm) => (calm ? 0 : phaseAt(at));
+
+  function glyph(at, calm) {
+    const level = colorLevel();
+    if (calm) return ultra && level ? rainbowSolid(sym.think, 0) : c.accent(sym.think);
     const frames = sym.spinner;
-    const step = Math.floor(Math.max(0, at - startedAt) / TICK_MS / (frames.length <= 4 ? 2 : 1));
-    return c.accent(frames[step % frames.length]);
+    const char = tier === "full" && level >= 2
+      ? sym.think
+      : frames[Math.floor(Math.max(0, at - startedAt) / TICK_MS / (frames.length <= 4 ? 2 : 1)) % frames.length];
+    if (ultra && level) return rainbowSolid(char, phaseAt(at));
+    return level >= 2 ? breathing(at)(char) : c.accent(char);
   }
 
   function verb(at) {
-    if (label) return label.replace(/(\.{2,}|…)+$/, "");
+    if (label) return trailed(label);
     const list = tList(`verb.${phase}`);
     if (!list.length) return "";
     const step = Math.floor(Math.max(0, at - phaseSince) / VERB_MS) + Math.floor(startedAt / 1000);
-    return list[((step % list.length) + list.length) % list.length];
+    return trailed(list[((step % list.length) + list.length) % list.length]);
   }
 
   function build(width, l) {
     const at = now();
+    const calm = still();
+    const rtl = l === "ar";
     const elapsed = Math.max(0, at - startedAt);
-    const mark = glyph(at);
+    const mark = glyph(at, calm);
     const markW = stringWidth(sym.think);
-    const stats = [];
+    if (width < markW + 2) return width < markW ? "" : rtl ? " ".repeat(width - markW) + mark : mark;
+
+    // Logical pieces; in Arabic the runs that must keep their own order are isolated.
+    const keep = s => (rtl ? ltrIsolate(s) : s);
+    let stats = "";
     if (elapsed >= 1000 || tokens > 0) {
-      const parts = [formatElapsed(elapsed, l)];
-      if (tokens > 0) parts.push(`${UP} ${formatTokens(tokens)}`);
-      stats.push(`(${parts.join(` ${sym.dot} `)})`);
+      const parts = [formatElapsed(elapsed, l).split(" ").map(keep).join(" ")];
+      if (tokens > 0) parts.push(keep(`${UP} ${formatTokens(tokens)}`));
+      stats = ` (${parts.join(` ${sym.dot} `)})`;
     }
-    const hint = t("term.spinner.interrupt");
-    const room = Math.max(1, width - markW - 1);
-    let head = `${verb(at)}${sym.ellipsis}`;
-    let tail = "";
+    const hint = ` ${sym.dot} ${t("term.spinner.interrupt")}`;
     const tag = ultra ? ` ${ULTRA}` : "";
-    const withStats = stats.length ? ` ${stats[0]}` : "";
-    const withHint = ` ${sym.dot} ${hint}`;
-    if (stringWidth(head + tag + withStats + withHint) <= room) tail = tag + c.dim(withStats + withHint);
-    else if (stringWidth(head + tag + withStats) <= room) tail = tag + c.dim(withStats);
+
+    // Fitted as logical text: parts go from the end, then the verb is shortened.
+    const room = width - markW - 1;
+    let head = verb(at);
+    let tail = "";
+    if (stringWidth(head + tag + stats + hint) <= room) tail = tag + c.dim(stats + hint);
+    else if (stringWidth(head + tag + stats) <= room) tail = tag + c.dim(stats);
     else if (tag && stringWidth(head + tag) <= room) tail = tag;
     else head = fitLogical(head, room, sym.ellipsis);
-    const paintHead = ultra && colorLevel() ? s => rainbowSolid(s, phaseAt(at) + 0.2) : c.accent;
-    const plain = `${mark} ${paintHead(head)}${tail}`;
-    const out = toVisual(plain, l === "ar" ? { dir: "rtl", width, align: "end" } : { dir: "ltr" });
-    const clean = stripBidiMarks(out);
-    const fitted = stringWidth(clean) > width ? clipLine(clean, width) : clean;
-    return ultra ? paintUltra(fitted, phaseAt(at)) : fitted;
+
+    const phase0 = rainbowPhase(at, calm);
+    const paintHead = ultra && colorLevel() ? s => rainbowSolid(s, phase0 + 0.2) : c.accent;
+    const body = `${paintHead(head)}${tail}`;
+    const line = rtl
+      ? stripBidiMarks(toVisual(body, { dir: "rtl", width: room, align: "end" })) + " " + mark
+      : stripBidiMarks(toVisual(`${mark} ${body}`, { dir: "ltr" }));
+    return ultra ? paintUltra(line, phase0) : line;
   }
 
   return {

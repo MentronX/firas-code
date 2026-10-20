@@ -19,6 +19,10 @@
 //  - A dialog ignores Enter and the number keys for `graceMs` after it appears (stray type-ahead must not approve).
 //  - This object never touches the live region while `external` is set: readPrompt owns it then (feedback lines).
 //  - The raw text of the last answer is kept for /copy (cleaned of escape sequences, markdown untouched).
+//  - Every line printed here is laid out to the full content width (views.js para), so in the Arabic interface it is
+//    right-aligned with the rest of the column. Ctrl+O lays the last card out again at the CURRENT width.
+//  - Blocks are separated by one blank line: a card, a notice or the "thought for" line that follows streamed text (or
+//    the echoed message) starts with one; consecutive cards and consecutive notices stay together.
 import { c, sym } from "./theme.js";
 import { t, getLang } from "../i18n/index.js";
 import { createSpinner as defaultCreateSpinner } from "./spinner.js";
@@ -29,8 +33,9 @@ import { readPrompt as defaultReadPrompt } from "./input.js";
 import { classifyCommand } from "../tools/classify.js";
 import { isAbortError } from "../link/errors.js";
 import {
-  GUTTER, contentWidth, cleanText, createStreamCleaner, fmtDuration, footerRow, para, vis, pickDialog, permissionDialog, planDialog,
-  questionDialog, renderNotice, renderRunningCard, renderToolCard, renderTodoCard, renderTodos, renderTurnFooter, truncateLogical,
+  GUTTER, contentWidth, cleanText, createStreamCleaner, fmtDuration, footerRow, para, pickDialog, permissionDialog, planDialog,
+  questionDialog, renderNotice, renderRunningCard, renderToolCard, renderTodoCard, renderTodos, renderTurnFooter, resultRows,
+  toolHeader, truncateLogical,
 } from "./views.js";
 import "./strings-app.js";
 
@@ -249,6 +254,9 @@ export function createInteractiveUi({
 
   const host = {
     width,
+    // A dialog is the whole live region while it is open, and the screen keeps only the bottom rows of one that is
+    // taller than it: the permission box folds its body to this height so its title is never what goes.
+    height: () => screen.height(),
     show(lines, cursor) { state.dialog = { lines, cursor: cursor ?? null }; render(); },
     hide() {
       state.dialog = null;
@@ -329,7 +337,8 @@ export function createInteractiveUi({
       spinner.set({ phase: "waiting" });
       const took = ms ?? (th ? now() - th.startedAt : 0);
       if (th && took >= THOUGHT_NOTE_MS) {
-        emit([vis(c.dim(`${sym.think} ${t("app.thinking.thought", { time: fmtDuration(took) })}`))], "thinking");
+        if (state.lastKind === "text" || state.lastKind === "user") ensureBlank();
+        emit(para(c.dim(`${sym.think} ${t("app.thinking.thought", { time: fmtDuration(took) })}`), width()), "thinking");
       }
       schedule();
     },
@@ -409,10 +418,12 @@ export function createInteractiveUi({
         render();
         return;
       }
-      const rendered = renderToolCard(card, { ok, summary, body, diff }, width());
+      const end = { ok, summary, body, diff };
+      const rendered = renderToolCard(card, end, width());
       if (state.lastKind === "text" || state.lastKind === "user") ensureBlank();
       emit(rendered.lines, "card");
-      state.lastCard = rendered.hidden ? { card, full: rendered.full } : null;
+      // The card and its result are kept, not the lines: Ctrl+O lays them out again at the width of that moment.
+      state.lastCard = rendered.hidden ? { card, end } : null;
       if (!state.tools.size) spinner.set({ phase: "waiting", label: undefined });
       render();
     },
@@ -429,15 +440,19 @@ export function createInteractiveUi({
         ensureBlank();
         const result = await questionDialog(host, request, { readLine, graceMs });
         const text = String(result.answer || "").trim();
-        const question = truncateLogical(cleanText(request.question), width() - 4);
-        emit([vis(`${c.accent("?")} ${c.bold(question)}`), `${GUTTER}${c.gray(sym.corner)} ${vis(text || c.dim(t("app.q.dismissed")))}`], "card");
+        const w = width();
+        const question = cleanText(request.question).replace(/\s+/g, " ").trim();
+        // Both wrapped as paragraphs: a long answer that soft-wrapped on its own would read bottom-to-top in Arabic.
+        const asked = para(`${c.accent("?")} ${c.bold(question)}`, w, { indent: "  " });
+        const answered = resultRows(text || t("app.q.dismissed"), w, { prose: true, paint: text ? undefined : c.dim });
+        emit([...asked, ...answered], "card");
         return { answer: text };
       });
     },
     showPlan({ plan }) {
       return dialogGuard({ decision: "reject" }, async () => {
         ensureBlank();
-        emit([vis(c.bold(c.accent(`${sym.mark} ${t("app.plan.title")}`))), ""], "text");
+        emit([...para(c.bold(c.accent(`${sym.mark} ${t("app.plan.title")}`)), width()), ""], "text");
         printRaw(shift(renderMarkdown(cleanText(plan), { width: width() + GUTTER.length, dir: "auto", indent: GUTTER })));
         printRaw([""]);
         const result = await planDialog(host, { readLine, graceMs });
@@ -450,19 +465,32 @@ export function createInteractiveUi({
       state.todos = Array.isArray(items) ? items.map(item => ({ ...item })) : null;
       render();
     },
+    /**
+     * Another conversation (/clear, /resume): its own task list, or none, and nothing remembered of the last one's. The
+     * old list would otherwise stay pinned over every later turn, and the new conversation's first list would be
+     * compared with the old card and get only a status line, or nothing.
+     */
+    resetTodos(items) {
+      state.todoCard = null;
+      state.todosPrinted = "";
+      ui.todos(items);
+    },
     agentStart({ id, description, kind }) {
       const entry = state.tools.get(id);
       const label = t(`app.agent.${kind === "general" ? "general" : "explore"}`);
       if (entry) { entry.card.summary = `${label} ${sym.dot} ${description}`; render(); return; }
-      emit([vis(`${c.gray(sym.bullet)} ${c.bold("Agent")}${c.dim("(")}${truncateLogical(`${label} ${sym.dot} ${cleanText(description)}`, width() - 12)}${c.dim(")")}`, "ltr")], "card");
+      // The header of a card like any other (a structural, left-to-right line): an explorer reads, a task may write.
+      const card = { name: "Agent", summary: `${label} ${sym.dot} ${cleanText(description)}`, readOnly: kind !== "general" };
+      emit([toolHeader(card, width(), "running")], "card");
     },
     agentEnd({ id, ok, summary }) {
       // A sub-agent started from a tool call already has a card, and the tool's own result line says how it went.
       if (state.tools.has(id)) return;
-      const text = truncateLogical(cleanText(summary || ""), width() - 6);
-      emit([`${GUTTER}${c.gray(sym.corner)} ${vis(ok ? text : c.red(text), "ltr")}`], "card");
+      // Standing on its own (other cards may have come between), the result is prose: an Arabic one is right-aligned.
+      emit(resultRows(summary, width(), { ok, prose: true }), "card");
     },
     notice(level, text) {
+      if (state.lastKind === "text" || state.lastKind === "user") ensureBlank();
       emit(renderNotice(level, text, width()), "notice");
     },
     usage(u) {
@@ -546,21 +574,30 @@ export function createInteractiveUi({
     echoUser(text) {
       const w = width();
       const body = cleanText(text).replace(/\s+$/, "");
-      const rows = para(body, w - 2, { firstIndent: `${c.accent(sym.prompt)} `, indent: "  " });
-      const shown = rows.length > 12 ? [...rows.slice(0, 12), vis(c.dim(t("app.fold.more", { n: rows.length - 12 })))] : rows;
+      // The full width, like every other block: an Arabic message ends on the same right edge as the answer under it.
+      const rows = para(body, w, { firstIndent: `${c.accent(sym.prompt)} `, indent: "  " });
+      const fold = () => para(c.dim(t("app.fold.more", { n: rows.length - 12 })), w, { firstIndent: "  " });
+      const shown = rows.length > 12 ? [...rows.slice(0, 12), ...fold()] : rows;
       ensureBlank();
       emit(shown, "user");
     },
-    /** Ctrl+O: the last folded card, in full. */
+    /** Ctrl+O: the last folded card, in full, laid out for the terminal as it is now. */
     expandLast() {
       const last = state.lastCard;
       if (!last) { emit(renderNotice("info", t("app.card.nothing"), width()), "notice"); return; }
+      const w = width();
+      const full = renderToolCard(last.card, last.end, w).full;
       ensureBlank();
-      emit([vis(c.dim(`${sym.hline.repeat(3)} ${t("app.card.full")}`)), ...last.full, ""], "card");
+      emit([...para(c.dim(`${sym.hline.repeat(3)} ${t("app.card.full")}`), w), ...full, ""], "card");
     },
 
     /** A picker for commands (sessions, language). Resolves the chosen index or -1. */
     pick(options) { return dialogGuard(-1, () => pickDialog(host, { ...options, graceMs })); },
+    /**
+     * Runs a dialog of the caller's own: run(host, { graceMs }) draws with host.show(lines), reads keys through
+     * host.onKey and resolves its answer. `fallback` is the answer when there is no terminal or the dialog is aborted.
+     */
+    dialog(run, fallback = null) { return dialogGuard(fallback, () => run(host, { graceMs })); },
     readLine,
     host,
 

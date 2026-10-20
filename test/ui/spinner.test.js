@@ -68,7 +68,7 @@ test("English line: verb, elapsed time, tokens and the interrupt hint", () => {
   const line = sp.line(100);
   const verbs = tList("verb.thinking");
   assert.ok(verbs.some(v => line.includes(`${v}${sym.ellipsis} (12s ${sym.dot} ${UP} 3.2k)`)), line);
-  assert.ok(line.endsWith(`${sym.dot} esc to interrupt`), line);
+  assert.ok(line.endsWith(`${sym.dot} Esc to interrupt`), line);
   assert.ok(stringWidth(line) <= 100);
 });
 
@@ -172,7 +172,7 @@ test("the hint goes first when the line is tight, then the counters", () => {
   sp.start({ phase: "thinking", startedAt: clock.now() - 65_000 });
   sp.set({ tokens: 3200 });
   const full = sp.line(200);
-  assert.ok(full.includes("esc to interrupt"));
+  assert.ok(full.includes("Esc to interrupt"));
   const verb = tList("verb.thinking").find(v => full.includes(v));
   const noHint = sp.line(stringWidth(full) - 4);
   assert.ok(!noHint.includes("interrupt") && noHint.includes("(1m 5s"), noHint);

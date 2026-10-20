@@ -1,51 +1,40 @@
-// The welcome card shown at start-up.
-//
-//   ╭────────────────────────────────────────────────────────╮
-//   │                                                        │
-//   │   ██████   Firas Code 2  ·  فراس كود 2    v2.0.0       │
-//   │   ██▀▀▀▀   ~\Projects\my-app                           │
-//   │   ██▀▀     effort: medium · mode: default              │
-//   │   ██       Tip: Type / to see every command            │
-//   │                                                        │
-//   ╰────────────────────────────────────────────────────────╯
-//   type / for commands
-//
-// Decisions:
-//  - Width: the card is at most 84 columns and starts after a 2-column gutter. Below 60 columns the box and the mark
-//    are dropped for a compact stack of lines.
-//  - Arabic UI mirrors the whole card: the mark moves to the right edge, the text block is right-aligned beside it, the
-//    card itself hugs the right edge (two columns of gutter there). Latin snippets (the folder, the version) are
-//    isolated so their slashes and dots stay put inside Arabic text.
-//  - The folder is shown relative to the home directory (~) and shortened from the left, because the end of a path is
-//    the part that tells projects apart.
-//  - The tip changes once a day: the day number (local date) picks one of the tips in strings.js, the same index in
-//    both languages. `date` is an optional extra parameter so tests can pin it.
-//  - The mark is a 4-row letter F in block characters; the ASCII fallback uses # and =.
 import os from "node:os";
 import path from "node:path";
-import { c, sym, hasUnicode } from "./theme.js";
-import { stringWidth, toVisual, wrapLogical } from "../text/display.js";
+import { c, sym } from "./theme.js";
+import { hasRtl, stringWidth, toVisual, wrapLogical } from "../text/display.js";
 import { t } from "../i18n/index.js";
 import { tList, withLang, modeLabel, effortLabel } from "./strings.js";
-import { clipLine } from "./screen.js";
 import { fitLogical, fitPathTail, ltrIsolate, stripBidiMarks } from "./textfit.js";
 import { isInside } from "../util/paths.js";
-import { NAME, NAME_AR } from "../brand.js";
-import { paintUltra } from "./ultra.js";
+import { MAKER, NAME, NAME_AR } from "../brand.js";
+import { ULTRA, paintUltra } from "./ultra.js";
 
-const MARK_W = 6;
-const MAX_CARD = 84;
-const COMPACT_BELOW = 60;
+// Banner layout constants. MAX_CARD caps the card width, COMPACT_BELOW switches to the bare header.
+const MARK_W = 7;
+const PAD = 4;
+const GAP = 4;
+const INSET = 2;
+const MAX_CARD = 88;
+const COMPACT_BELOW = 56;
+const KEYS = [["/help", "help"], ["/effort", "effort"], ["Shift+Tab", "mode"]];
+const SPACING = [[" ", ` ${sym.dot} `], ["  ", `  ${sym.dot}  `], ["  ", `   ${sym.dot}   `]];
+const plain = s => s;
+const bar = width => c.gray(sym.boxH.repeat(width));
 
-const MARK = hasUnicode
-  ? [c.accent("██████"), c.accent("██") + c.accentSoft("▀▀▀▀"), c.accent("██") + c.accentSoft("▀▀") + "  ", c.accent("██") + "    "]
-  : [c.accent("######"), c.accent("##") + c.accentSoft("===="), c.accent("##") + c.accentSoft("==") + "  ", c.accent("##") + "    "];
+// One shape, both languages: a stylised F that is exactly MARK_W cells wide on every row.
+function markRows() {
+  const core = n => c.accent(sym.block.repeat(n));
+  const pad = n => " ".repeat(n);
+  const fit = s => s + pad(Math.max(0, MARK_W - stringWidth(s)));
+  // Only full blocks; every terminal draws them the same way, so the F never breaks into half-height pieces.
+  return [fit(core(7)), fit(core(2)), fit(core(5)), fit(core(2)), fit(core(2))];
+}
 
 function shortenHome(dir) {
   const home = os.homedir();
   if (home && isInside(home, dir)) {
     const rel = path.relative(home, dir);
-    return rel ? "~" + path.sep + rel : "~";
+    return rel ? "~" + path.sep + rel : "~" + path.sep + path.basename(home || dir);
   }
   return dir;
 }
@@ -55,87 +44,115 @@ function dayNumber(date) {
   return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000);
 }
 
-/** One styled LOGICAL line -> one visual line exactly `width` columns wide (padded on the reading-end side). */
-function visual(styled, rtl, width) {
-  let v = stripBidiMarks(toVisual(styled, rtl ? { dir: "rtl", width, align: "end" } : { dir: "ltr" }));
-  if (stringWidth(v) > width) v = clipLine(v, width);
+const iso = (s, rtl) => (rtl && !hasRtl(s) ? ltrIsolate(s) : s);
+
+function order(styled, rtl, width) {
+  return stripBidiMarks(toVisual(styled, rtl ? { dir: "rtl", width, align: "end" } : { dir: "ltr" }));
+}
+
+function row(styled, rtl, width, hang = 0) {
+  if (hang > 0) {
+    const rest = row(styled, rtl, width - hang);
+    return rtl ? rest + " ".repeat(hang) : " ".repeat(hang) + rest;
+  }
+  let v = order(stringWidth(styled) > width ? fitLogical(styled, width, sym.ellipsis) : styled, rtl, width);
+  for (let room = width - 1; stringWidth(v) > width && room > 0; room--) v = order(fitLogical(styled, room, sym.ellipsis), rtl, width);
   const gap = width - stringWidth(v);
-  return rtl || gap <= 0 ? v : v + " ".repeat(gap);
+  if (gap <= 0) return v;
+  return rtl ? " ".repeat(gap) + v : v + " ".repeat(gap);
 }
 
-/** "label: value" pieces as one styled string, cut to `room` columns when it does not fit. */
-function labelled(pairs, room, rtl) {
-  const plain = pairs.map(([label, value]) => `${label}: ${value}`).join(` ${sym.dot} `);
-  if (stringWidth(plain) > room) return c.dim(fitLogical(plain, room, sym.ellipsis));
-  return pairs.map(([label, value]) => `${c.dim(label + ":")} ${rtl ? ltrIsolate(value) : value}`).join(c.dim(` ${sym.dot} `));
+function pairLine(items, room, rtl) {
+  for (let n = items.length; n > 0; n--) {
+    const shown = items.slice(0, n);
+    for (const [inner, sep] of SPACING) {
+      if (stringWidth(shown.map(p => p.a + inner + p.b).join(sep)) > room) continue;
+      return shown.map(p => p.pa(iso(p.a, rtl)) + inner + p.pb(iso(p.b, rtl))).join(c.dim(sep));
+    }
+  }
+  return "";
 }
 
-function content(o, room) {
-  const rtl = o.l === "ar";
-  const names = rtl ? [NAME_AR, NAME] : [NAME, NAME_AR];
-  const title = c.bold(names[0]) + c.dim(` ${sym.dot} `) + (rtl ? ltrIsolate(names[1]) : names[1]);
-  const version = c.dim(rtl ? ltrIsolate(`v${o.version}`) : `v${o.version}`);
-  const rows = { title, version };
-
-  const dir = fitPathTail(shortenHome(o.cwd), room, sym.ellipsis);
-  rows.folder = rtl ? ltrIsolate(dir) : dir;
-
-  rows.settings = labelled([
-    [t("term.banner.effort"), effortLabel(o.effort || "medium")],
-    [t("term.banner.mode"), modeLabel(o.mode || "default")],
+function settingsLine(o, room, rtl) {
+  const effort = o.effort || "medium";
+  return pairLine([
+    { a: t("term.banner.effort"), b: effortLabel(effort), pa: c.dim, pb: effort === ULTRA ? plain : c.accentSoft },
+    { a: t("term.banner.mode"), b: modeLabel(o.mode || "default"), pa: c.dim, pb: plain },
   ], room, rtl);
+}
 
-  if (o.resumed) rows.resumed = c.accent(fitLogical(t("term.banner.resumed"), room, sym.ellipsis));
+function keyLine(room, rtl) {
+  return pairLine(KEYS.map(([key, what]) => ({ a: key, b: t(`term.banner.key.${what}`), pa: plain, pb: c.dim })), room, rtl);
+}
 
+function tipRows(o, room) {
   const tips = tList("tip");
-  const tip = tips.length ? tips[((dayNumber(o.date) % tips.length) + tips.length) % tips.length] : "";
-  const tipText = `${t("term.banner.tip")}: ${tip}`;
-  const lines = wrapLogical(tipText, room);
-  if (lines.length > 2) lines.splice(1, lines.length, fitLogical(lines.slice(1).join(" "), room, sym.ellipsis));
-  rows.tip = lines.map(l => c.dim(l));
-  return rows;
+  if (!tips.length) return [];
+  const tip = tips[((dayNumber(o.date) % tips.length) + tips.length) % tips.length];
+  const label = t("term.banner.tip");
+  const lead = stringWidth(label) + 2;
+  const labelled = room - lead >= 12;
+  const textRoom = labelled ? room - lead : room;
+  let lines = wrapLogical(tip, textRoom);
+  if (lines.length > 2) lines = [lines[0], fitLogical(lines.slice(1).join(" "), textRoom, sym.ellipsis)];
+  if (!labelled) return lines.map(text => ({ text, hang: 0 }));
+  return lines.map((line, i) => (i === 0 ? { text: c.dim(label) + "  " + line, hang: 0 } : { text: line, hang: lead }));
+}
+
+function folderText(o, room, rtl) {
+  return iso(fitPathTail(shortenHome(o.cwd), room, sym.ellipsis), rtl);
+}
+
+function names(rtl) {
+  return rtl ? [NAME_AR, NAME] : [NAME, MAKER];
+}
+
+function titleRow(o, room, rtl) {
+  const [first, second] = names(rtl);
+  const title = [c.bold(first) + c.dim(` ${sym.dot} `) + iso(second, rtl), c.bold(first)].find(s => stringWidth(s) <= room) || c.bold(first);
+  const version = o.version ? c.dim(iso(`v${o.version}`, rtl)) : "";
+  const tw = stringWidth(title);
+  const vw = stringWidth(version);
+  if (!version || tw + 2 + vw > room) return row(title, rtl, room);
+  const gap = " ".repeat(room - tw - vw);
+  const name = order(title, rtl);
+  const ver = order(version, false);
+  return rtl ? ver + gap + name : name + gap + ver;
 }
 
 function card(o, width) {
   const rtl = o.l === "ar";
   const cardW = Math.min(width - 2, MAX_CARD);
-  const textW = cardW - 15;
-  const rows = content(o, textW);
-  const border = s => c.gray(s);
-  const edge = border(sym.boxV);
-
-  // title row: names on the reading side, version on the far side
-  const titleW = stringWidth(stripBidiMarks(toVisual(rows.title, { dir: rtl ? "rtl" : "ltr" })));
-  const versionW = stringWidth(stripBidiMarks(toVisual(rows.version, { dir: "ltr" })));
-  let titleRow;
-  if (titleW + 2 + versionW <= textW) {
-    const gap = " ".repeat(textW - titleW - versionW);
-    const t1 = stripBidiMarks(toVisual(rows.title, { dir: rtl ? "rtl" : "ltr" }));
-    const v1 = stripBidiMarks(toVisual(rows.version, { dir: "ltr" }));
-    titleRow = rtl ? v1 + gap + t1 : t1 + gap + v1;
-  } else titleRow = visual(rows.title, rtl, textW);
-
-  const body = [titleRow, visual(rows.folder, rtl, textW)];
-  if (rows.resumed) body.push(visual(rows.resumed, rtl, textW));
-  body.push(visual(rows.settings, rtl, textW));
-  for (const l of rows.tip) body.push(visual(l, rtl, textW));
-
-  const blank = " ".repeat(textW);
-  const count = Math.max(body.length, MARK.length);
-  const lines = [];
-  const side = (text, k) => {
-    const mark = k < MARK.length ? MARK[k] : " ".repeat(MARK_W);
-    return rtl
-      ? edge + "  " + text + "   " + mark + "  " + edge
-      : edge + "  " + mark + "   " + text + "  " + edge;
-  };
   const inner = cardW - 2;
-  lines.push(border(sym.boxTL + sym.boxH.repeat(inner) + sym.boxTR));
-  lines.push(edge + " ".repeat(inner) + edge);
-  for (let k = 0; k < count; k++) lines.push(side(k < body.length ? body[k] : blank, k));
-  lines.push(edge + " ".repeat(inner) + edge);
-  lines.push(border(sym.boxBL + sym.boxH.repeat(inner) + sym.boxBR));
-  lines.push(rtl ? visual(c.dim(t("term.banner.hint")), true, cardW) : stripBidiMarks(toVisual(c.dim(t("term.banner.hint")), { dir: "ltr" })));
+  const textW = inner - 2 * PAD - MARK_W - GAP;
+  const ruleW = Math.max(0, textW - 2 * INSET);
+  const accentRun = Math.min(8, Math.max(0, ((textW / 3) | 0)));
+  const ruleRow = " ".repeat(INSET) + c.accent(sym.boxH.repeat(accentRun)) + bar(ruleW - accentRun);
+  const body = [
+    titleRow(o, textW, rtl),
+    row(ruleRow, rtl, textW),
+    row(folderText(o, textW, rtl), rtl, textW),
+    row(settingsLine(o, textW, rtl), rtl, textW),
+  ];
+  if (o.resumed) body.push(row(c.accent(t("term.banner.resumed")), rtl, textW));
+  for (const tip of tipRows(o, textW)) body.push(row(tip.text, rtl, textW, tip.hang));
+
+  const mark = markRows();
+  const edge = c.gray(sym.boxV);
+  const pad = " ".repeat(PAD);
+  const gap = " ".repeat(GAP);
+  const side = (text, k) => {
+    const m = k < mark.length ? mark[k] : " ".repeat(MARK_W);
+    const content = edge + pad + (rtl ? text + gap + m : m + gap + text) + pad + edge;
+    return c.bgPanel(content);
+  };
+
+  const lines = [c.gray(sym.boxTL + sym.boxH.repeat(inner) + sym.boxTR)];
+  for (let k = 0; k < Math.max(body.length, mark.length); k++) lines.push(side(k < body.length ? body[k] : " ".repeat(textW), k));
+  lines.push(side(" ".repeat(textW), mark.length), c.gray(sym.boxBL + sym.boxH.repeat(inner) + sym.boxBR));
+
+  const keys = keyLine(cardW - 4, rtl);
+  if (keys) lines.push(rtl ? row(keys, true, cardW - 2) : "  " + order(keys, false));
 
   const lead = rtl ? " ".repeat(Math.max(0, width - 2 - cardW)) : "  ";
   return lines.map(l => lead + l);
@@ -144,25 +161,22 @@ function card(o, width) {
 function compact(o, width) {
   const rtl = o.l === "ar";
   const total = width - 2;
-  const rows = content(o, Math.max(8, total - 4));
-  const names = rtl ? [NAME_AR, NAME] : [NAME, NAME_AR];
-  const mark = `${c.accent(sym.mark)} ${c.bold(names[0])}`;
-  const both = `${mark}${c.dim(` ${sym.dot} `)}${rtl ? ltrIsolate(names[1]) : names[1]}`;
-  const head = [`${both} ${rows.version}`, both, mark].find(v => stringWidth(v) <= total) || mark;
-  const lines = [head, rows.folder];
-  if (rows.resumed) lines.push(rows.resumed);
-  lines.push(rows.settings, ...rows.tip);
-  lines.push(c.dim(t("term.banner.hint")));
-  return lines.map((l, i) => {
-    if (rtl) return visual(l, true, i === 0 ? total : total - 2);
-    return "  " + (i === 0 ? "" : "  ") + stripBidiMarks(toVisual(l, { dir: "ltr" }));
-  }).map(l => clipLine(l, width));
+  const room = total - 2;
+  const [first, second] = names(rtl);
+  const mark = `${c.accent(sym.mark)} ${c.bold(first)}`;
+  const both = `${mark}${c.dim(` ${sym.dot} `)}${iso(second, rtl)}`;
+  const version = o.version ? c.dim(iso(`v${o.version}`, rtl)) : "";
+  const head = [version && `${both}  ${version}`, both, mark].find(v => v && stringWidth(v) <= total) || mark;
+
+  const rows = [{ text: folderText(o, room, rtl), hang: 0 }];
+  if (o.resumed) rows.push({ text: c.accent(t("term.banner.resumed")), hang: 0 });
+  rows.push({ text: settingsLine(o, room, rtl), hang: 0 }, ...tipRows(o, room));
+  const keys = keyLine(room, rtl);
+  if (keys) rows.push({ text: keys, hang: 0 });
+  if (rtl) return [row(head, true, total), ...rows.map(r => row(r.text, true, room, r.hang))];
+  return ["  " + row(head, false, total).trimEnd(), ...rows.map(r => "    " + row(r.text, false, room, r.hang).trimEnd())];
 }
 
-/**
- * renderBanner({ width, cwd, effort, mode, lang, version, resumed }) -> string[]  
- * Finished visual lines, with a blank line before and after.
- */
 export function renderBanner({ width = 80, cwd, effort, mode, lang, version, resumed = false, date } = {}) {
   const l = lang === "ar" ? "ar" : "en";
   const w = Math.max(20, Math.floor(width) || 80);

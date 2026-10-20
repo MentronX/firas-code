@@ -64,10 +64,12 @@ export function restrictToOwner(target, { platform = process.platform, env = pro
     const icacls = windowsSystemTool("icacls", env);
     // (OI)(CI): files and folders created inside later are born with the same short list.
     const grant = `${user}:${isDirectory ? "(OI)(CI)(F)" : "(F)"}`;
-    const res = spawnSync(icacls, [target, "/inheritance:r", "/grant:r", grant], { stdio: "ignore", windowsHide: true, timeout: 10000, env: childEnv(env) });
+    // A short timeout: this runs synchronously on the save path, and a hung icacls must not freeze the
+    // terminal for ten seconds on every save when the folder's ACL cannot be changed.
+    const res = spawnSync(icacls, [target, "/inheritance:r", "/grant:r", grant], { stdio: "ignore", windowsHide: true, timeout: 2000, env: childEnv(env) });
     if (res?.error || res?.status !== 0) return false;
     if (!stillReachable(target, isDirectory)) {
-      spawnSync(icacls, [target, "/reset"], { stdio: "ignore", windowsHide: true, timeout: 10000, env: childEnv(env) });
+      spawnSync(icacls, [target, "/reset"], { stdio: "ignore", windowsHide: true, timeout: 2000, env: childEnv(env) });
       return false;
     }
     tried.set(key, true);
@@ -79,7 +81,7 @@ export function restrictToOwner(target, { platform = process.platform, env = pro
 export function forgetRestrictions() { tried.clear(); }
 
 // What the app itself puts in its folder. A folder holding anything else is somebody's, and is left as it is.
-const OWN_ENTRIES = /^(config\.json(\.bad)?|sessions|.+\.tmp)$/i;
+const OWN_ENTRIES = /^(config\.json(\.bad)?|sessions|skills|.+\.tmp)$/i;
 
 function isOwnFolder(folder) {
   if (path.dirname(folder) === folder) return false;

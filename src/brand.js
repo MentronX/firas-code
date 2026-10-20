@@ -15,7 +15,7 @@ export const NAME = "Firas Code 2";
 export const NAME_AR = "فراس كود 2";
 export const MAKER = "Firas AI";
 export const BIN = "firas";
-/** The model id this product sends with every request. */
+/** The public model alias this product sends with every request; the service resolves it to the real model privately. */
 export const MODEL_ID = "firas-code-2";
 /** Where the service lives unless FIRAS_ORIGIN / --origin says otherwise. */
 export const DEFAULT_ORIGIN = "https://firasai.org";

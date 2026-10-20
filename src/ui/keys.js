@@ -114,7 +114,9 @@ function decodeCsi(body, fc, seq) {
   if (fc === "u") {
     const code = parts[0].split(":");
     if (int(code[0]) === undefined) return key("unknown", seq);
-    const shifted = int(code[1]) === undefined ? undefined : String.fromCodePoint(int(code[1]));
+    // A malformed sequence can name a code point above U+10FFFF; String.fromCodePoint throws on it.
+    const shiftedCode = int(code[1]);
+    const shifted = Number.isInteger(shiftedCode) && shiftedCode >= 0 && shiftedCode <= 0x10ffff ? String.fromCodePoint(shiftedCode) : undefined;
     const m = (parts[1] || "").split(":");
     if (int(m[1]) === 3) return null; // key release
     return codeKey(int(code[0]), int(m[0]), seq, shifted);

@@ -313,7 +313,9 @@ export function createServiceClient({
         conn = await connect(spec, signal);
         if (!conn.response.ok) throw await failureOf(conn, secrets, signal);
         for await (const event of normalized(conn, secrets)) {
-          delivered = true;
+          // A block_start with no content is not an answer yet: a stream that breaks before the first
+          // delta can still be retried without the caller seeing a half-started message.
+          if (event.type === "text_delta" || event.type === "thinking_delta" || event.type === "tool_json_delta" || event.type === "message_stop") delivered = true;
           yield event;
         }
         return;

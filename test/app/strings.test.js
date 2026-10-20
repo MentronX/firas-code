@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { t, setLang } from "../../src/i18n/index.js";
 import "../../src/ui/strings-app.js";
+import "../../src/ui/strings-effort.js";
 import { EFFORTS } from "../../src/config.js";
 import { banned, skipNoList, avoidedWordPattern } from "../helpers/banned.js";
 

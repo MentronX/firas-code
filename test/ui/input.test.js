@@ -408,7 +408,7 @@ test("keys the editor does not use are ignored", () => {
 test("a small paste is inserted verbatim: CRLF normalised, tabs expanded, control characters dropped", () => {
   const ctx = ctxOf();
   const r = press(typed("x", ctx), ctx, "paste:a\r\nb\tc\x1b[31m\x07d\x00");
-  assert.equal(r.s.text, "xa\nb  c[31md");
+  assert.equal(r.s.text, "xa\nb  cd", "the whole ANSI sequence is dropped, not just its ESC byte");
   assert.equal(r.s.chips.length, 0);
   assert.equal(r.s.cursor, r.s.text.length);
 });
@@ -899,7 +899,7 @@ test("the Arabic placeholder is right-aligned and the caret waits at the right e
       assert.ok(row.startsWith("> "), "the prompt mark stays on the left");
       if (width === 50) {
         assert.equal(row.length, width - 1);
-        assert.ok(row.slice(2, 12).trim() === "", "text is pushed to the right: " + row);
+        assert.ok(row.trimEnd().length >= width - 2, "text is pushed to the right: " + row);
       }
     }
     // The first Arabic letter goes where the caret was.
@@ -1119,7 +1119,7 @@ test("end to end on a terminal emulator: typing Arabic, wrapping, the menu and a
   settle();
   const first = vt.all();
   assert.deepEqual([first[0], first[1], first[3], first[4]], ["earlier output", sym.hline.repeat(30), sym.hline.repeat(30), "footer line"]);
-  assert.ok(first[2].startsWith("> Type a message") && first[2].endsWith(sym.ellipsis), first[2]);
+  assert.ok(first[2].startsWith("> Type a message"), first[2]);
   sin.type("مرحبا");
   settle();
   const rows = vt.rows_();

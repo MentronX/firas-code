@@ -8,8 +8,9 @@ import { buildSubagentPrompt, defaultShellLabel, formatDate, loadProjectInstruct
 import { createSession } from "./session.js";
 import { randomId, safeUi } from "./support.js";
 
-export const SUBAGENT_MAX_STEPS = 30;
-const NEVER_FOR_SUBAGENTS = new Set(["Agent", "AskUserQuestion", "ExitPlanMode", "TodoWrite"]);
+export const SUBAGENT_MAX_STEPS = 100;
+// Skill too: a skill is the person's playbook for the main agent, and a sub-agent's prompt lists none to load.
+const NEVER_FOR_SUBAGENTS = new Set(["Agent", "AskUserQuestion", "ExitPlanMode", "TodoWrite", "Skill"]);
 const EXPLORE_EXCLUDED = new Set(["UiLibrary"]);
 const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultracode"];
 

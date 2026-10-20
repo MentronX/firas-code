@@ -101,7 +101,8 @@ export function createLsTool() {
           if (row.isDir) {
             let items = "";
             const expand = level + 1 < depth && !row.link && !DEFAULT_IGNORES.includes(row.name);
-            if (!expand) { try { items = ` (${fs.readdirSync(abs).length} items)`; } catch { items = ""; } }
+            // A link can point outside the project; counting its entries would leak what is there.
+            if (!expand && !row.link) { try { items = ` (${fs.readdirSync(abs).length} items)`; } catch { items = ""; } }
             lines.push(`${indent}${row.name}/${arrow}${items}${level + 1 < depth && DEFAULT_IGNORES.includes(row.name) ? " (not opened)" : ""}`);
             if (expand) listing(abs, row.rel, level + 1);
           } else {

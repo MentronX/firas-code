@@ -13,10 +13,15 @@
 //  - File text is untrusted: escape sequences and control characters are stripped, tabs become 4 spaces, CRLF is
 //    normalised. Code is always left-to-right and left-aligned; an Arabic string or comment inside a line is joined and
 //    its own run put in reading order (toVisual with an LTR base), the code around it never moves.
-import { c, bg, PALETTE, colorLevel, hasUnicode } from "./theme.js";
+//  - No row is ever wider than `width`, however narrow the card (down to 10 columns): the header keeps the end of the
+//    path (the file name) and drops its tags first, notes are shortened, code wraps in what is left after the gutter.
+//  - The notes (folds, "+N more lines") are part of the diff's left-to-right structure; their words are isolated, so an
+//    Arabic note that starts with a number ("16 سطرا دون تغيير") still reads right.
+import { c, bg, PALETTE, colorLevel, sym } from "./theme.js";
 import { registerStrings, t } from "../i18n/index.js";
 import { stripAnsi, stringWidth, toVisual } from "../text/display.js";
 import { wrapTokens } from "./highlight.js";
+import { autoIsolate, fitLogical, fitPathTail, stripBidiMarks } from "./textfit.js";
 
 registerStrings("diff", {
   ar: {
@@ -25,11 +30,11 @@ registerStrings("diff", {
     same1: "سطر واحد دون تغيير",
     same2: "سطران دون تغيير",
     sameFew: "{n} أسطر دون تغيير",
-    sameMany: "{n} سطرًا دون تغيير",
+    sameMany: "{n} سطرا دون تغيير",
     more1: "سطر آخر",
     more2: "سطران آخران",
     moreFew: "{n} أسطر أخرى",
-    moreMany: "{n} سطرًا آخر",
+    moreMany: "{n} سطرا آخر",
   },
   en: {
     noChanges: "No changes",
@@ -188,7 +193,24 @@ function paint(text, kind, changed, fg) {
 }
 
 function note(text) {
-  return toVisual(text, { dir: "ltr" });
+  return stripBidiMarks(toVisual(text, { dir: "ltr" }));
+}
+
+/** A dim note in the code column: `lead` (a glyph) and words of their own direction, shortened to `room` cells. */
+function noteRow(pad, lead, text, room) {
+  const body = fitLogical(`${lead} ${autoIsolate(text)}`, Math.max(1, room), sym.ellipsis);
+  return c.dim(pad + note(body));
+}
+
+/** `path  (new file)  +2 -1` in at most `width` cells: the tags go first, then the path keeps its end. */
+function headerLine(path, isNew, counts, width) {
+  const newTag = isNew ? "  " + c.dim(`(${t("diff.newFile")})`) : "";
+  const countTag = counts ? "  " + counts : "";
+  for (const tags of [newTag + countTag, countTag, ""]) {
+    const room = width - stringWidth(tags);
+    if (room >= Math.min(8, stringWidth(path)) && room > 0) return c.bold(note(fitPathTail(path, room, sym.ellipsis))) + tags;
+  }
+  return c.bold(note(fitPathTail(path, width, sym.ellipsis)));
 }
 
 /**
@@ -196,7 +218,7 @@ function note(text) {
  * diff = { path, oldText, newText } (oldText null = new file); o = { width = 80, context = 3, maxLines = 60 }.
  */
 export function renderDiff(diff, o) {
-  const width = Math.max(30, Math.floor((o && o.width) || 80));
+  const width = Math.max(10, Math.floor((o && o.width) || 80));
   const context = Math.max(0, (o && o.context) ?? 3);
   const maxLines = Math.max(1, (o && o.maxLines) || 60);
   const isNew = diff.oldText === null || diff.oldText === undefined;
@@ -208,8 +230,8 @@ export function renderDiff(diff, o) {
 
   const path = cleanLine(String(diff.path || ""));
   const counts = (added ? c.green(`+${added}`) : "") + (added && removed ? " " : "") + (removed ? c.red(`-${removed}`) : "");
-  const head = [c.bold(note(path)) + (isNew ? "  " + c.dim(`(${t("diff.newFile")})`) : "") + (counts ? "  " + counts : "")];
-  if (!added && !removed) return [...head, c.dim(note(t("diff.noChanges")))];
+  const head = [headerLine(path, isNew, counts, width)];
+  if (!added && !removed) return [...head, c.dim(note(fitLogical(t("diff.noChanges"), width, sym.ellipsis)))];
 
   // Which rows are shown: changes plus `context` unchanged rows around them; longer unchanged runs fold.
   const n = ops.length;
@@ -248,7 +270,7 @@ export function renderDiff(diff, o) {
   const maxNum = Math.max(oldLines.length, newLines.length);
   const numW = Math.max(2, String(maxNum).length);
   const gutterW = numW + 3;
-  const contentW = Math.max(10, width - gutterW);
+  const contentW = Math.max(1, width - gutterW);
   const level = colorLevel();
   const out = [...head];
   let shown = 0;
@@ -260,7 +282,7 @@ export function renderDiff(diff, o) {
     consumed++;
     if (row.fold) {
       const text = t("diff.same" + plural(row.fold), { n: row.fold });
-      out.push(c.dim(blankNum + " " + note((hasUnicode ? "⋯ " : "... ") + text)));
+      out.push(noteRow(blankNum + " ", sym.more, text, width - numW - 1));
       shown++;
       continue;
     }
@@ -297,7 +319,7 @@ export function renderDiff(diff, o) {
   if (rows.length > consumed) {
     const hidden = rows.slice(consumed).reduce((sum, r) => sum + (r.fold ? r.fold : 1), 0);
     const text = t("diff.more" + plural(hidden), { n: hidden });
-    out.push(c.dim(blankNum + " " + note((hasUnicode ? "… " : "... ") + text)));
+    out.push(noteRow(blankNum + " ", sym.ellipsis, text, width - numW - 1));
   }
   return out;
 }

@@ -31,9 +31,14 @@
 //    other listener decides (the 'exit' hook still restores the terminal as the final backstop).
 //  - Keys typed while the process is suspended() belong to the child program: the data listener and raw mode are
 //    detached, not merely ignored.
+//  - The Windows console host gives every combining mark a cell of its own, behind Windows Terminal and VS Code
+//    (ConPTY) as much as in the classic window, and the classic window does the same to the bidi controls (measured).
+//    Those are removed from every line sent to a Windows terminal, committed and live alike (src/ui/terminal.js
+//    markFilter): the layout never gave them a cell, and the letters are already in place. A file or a pipe keeps them.
 import os from "node:os";
 import { stringWidth, stripAnsi } from "../text/display.js";
 import { createKeyParser } from "./keys.js";
+import { isModernTerminal, markFilter, stripConsoleMarks } from "./terminal.js";
 
 const CSI = "\x1b[";
 const ESC = "\x1b";
@@ -94,9 +99,11 @@ const LEADING_RE = /^((?:\x1b\[[0-9;:]*m)*)( +)/;
  * (seen on the real thing with a single shadda in a full-width, right-aligned line). A line that would wrap loses
  * leading blanks first (right-aligned text), and is cut only when that is not enough.
  */
-export function fitLine(line, cols) {
+export function fitLine(line, cols, platform = process.platform) {
   let out = clipLine(line, cols);
-  const extra = (stripAnsi(out).match(ZERO_CELL_RE) || []).length;
+  // Only the Windows console host gives a combining mark a cell of its own; elsewhere it is zero-width
+  // and counting it would cut a character that fits.
+  const extra = platform === "win32" ? (stripAnsi(out).match(ZERO_CELL_RE) || []).length : 0;
   if (!extra) return out;
   const over = stringWidth(out) + extra - cols;
   if (over <= 0) return out;
@@ -119,9 +126,9 @@ function supportsSync(env, platform) {
   if (env.FIRAS_NO_SYNC === "1") return false;
   const term = String(env.TERM || "");
   if (term === "linux" || term === "dumb") return false;
-  if (platform === "win32") {
-    return !!(env.WT_SESSION || env.TERM_PROGRAM || env.WEZTERM_EXECUTABLE || env.ConEmuANSI || env.ALACRITTY_LOG || /xterm|rxvt|tmux|screen/.test(term));
-  }
+  // The same decision as the glyph tier: TERM is set by MSYS/Cygwin whatever window they run in, so on
+  // Windows only the terminal's own variables count. Emitting ESC[?2026h to a classic console is noise.
+  if (platform === "win32") return isModernTerminal(env, platform);
   return true;
 }
 
@@ -178,8 +185,9 @@ function removeHooks() {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * createScreen({ stdin, stdout, env }) -> Screen  
- * Extra optional parameters, for tests: platform, now(), setTimer(fn, ms), clearTimer(handle), onError(err).
+ * createScreen({ stdin, stdout, env }) -> Screen
+ * Extra optional parameters, for tests: platform, now(), setTimer(fn, ms), clearTimer(handle), onError(err),
+ * stripMarks (true: everything stripConsoleMarks removes, false: nothing; by default terminal.js markFilter decides).
  * onError receives what a failing key or resize subscriber throws; by default it is rethrown on the next tick so a bug
  * is loud, but it never reaches the other subscribers or the parser.
  */
@@ -195,6 +203,8 @@ export function createScreen(o = {}) {
 
   const isTTY = !!stdout.isTTY;
   const useSync = isTTY && supportsSync(env, platform);
+  const consoleSafe = o.stripMarks === undefined ? markFilter({ platform, env, stream: stdout })
+    : o.stripMarks ? stripConsoleMarks : s => s;
 
   const keySubs = new Set();
   const resizeSubs = new Set();
@@ -250,7 +260,7 @@ export function createScreen(o = {}) {
       lines = lines.slice(start, start + maxRows);
       if (caret) caret = { row: Math.min(caret.row - start, lines.length - 1), col: caret.col };
     }
-    return { lines: lines.map(l => fitLine(l, cols)), caret };
+    return { lines: lines.map(l => fitLine(l, cols, platform)), caret };
   }
 
   // One complete repaint (optionally preceded by committed lines) as a single string.
@@ -394,11 +404,12 @@ export function createScreen(o = {}) {
     height: () => readDims().rows,
 
     print(lines) {
-      const list = toLines(lines);
       if (!isTTY) {
+        const list = toLines(lines);
         if (list.length) write(list.join("\n") + "\n");
         return;
       }
+      const list = toLines(lines).map(consoleSafe);
       if (disposed || suspended) {
         if (list.length) write(list.join("\r\n") + "\r\n");
         return;
@@ -416,7 +427,7 @@ export function createScreen(o = {}) {
 
     setLive(lines, cursor) {
       if (!isTTY || disposed) return;
-      live = (Array.isArray(lines) ? lines : []).map(l => String(l ?? "").replace(/[\r\n]+/g, " "));
+      live = (Array.isArray(lines) ? lines : []).map(l => consoleSafe(String(l ?? "").replace(/[\r\n]+/g, " ")));
       liveCursor = cursor ? { row: cursor.row, col: cursor.col } : null;
       requestDraw();
     },

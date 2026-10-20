@@ -9,7 +9,7 @@ import { setup } from "./helpers.js";
 import { banned, skipNoList } from "../helpers/banned.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const NAMES = ["Read", "Write", "Edit", "MultiEdit", "Bash", "BashOutput", "KillShell", "Glob", "Grep", "LS", "WebFetch", "TodoWrite", "AskUserQuestion", "ExitPlanMode", "UiLibrary"];
+const NAMES = ["Read", "Write", "Edit", "MultiEdit", "Bash", "BashOutput", "KillShell", "Glob", "Grep", "LS", "WebFetch", "TodoWrite", "AskUserQuestion", "ExitPlanMode", "UiLibrary", "Skill"];
 
 test("the toolbox has every tool, in order, with its documented name", () => {
   const tb = createToolbox({ cwd: process.cwd() });
@@ -138,7 +138,7 @@ test("every string key used by the tools exists in Arabic and English", () => {
     for (const lang of ["en", "ar"]) {
       setLang(lang);
       for (const key of keys) {
-        const params = { n: 2, file: "f", dir: "d", cmd: "c", host: "h", kind: "k", secs: "1", code: "1", signal: "s", id: "bg1", done: 1, from: 1, to: 2, i: 1, status: 200, type: "x", action: "a", answer: "a", pattern: "p", files: 1, chars: 1200, lines: 14 };
+        const params = { n: 2, name: "x", file: "f", dir: "d", cmd: "c", host: "h", kind: "k", secs: "1", code: "1", signal: "s", id: "bg1", done: 1, from: 1, to: 2, i: 1, status: 200, type: "x", action: "a", answer: "a", pattern: "p", files: 1, chars: 1200, lines: 14 };
         const text = t(key, params);
         if (text === key || /\{\w+\}/.test(text)) missing.push(`${lang}:${key}`);
         if (lang === "ar" && !/[؀-ۿ]/.test(text)) missing.push(`ar-not-arabic:${key}`);
