@@ -582,13 +582,22 @@ test("what is typed during a turn is kept, shown, and handed over once", async (
   begin();
   screen.type("next ");
   screen.type("step");
-  screen.press("return");
   screen.paste("pasted\n");
   screen.press("backspace");
   await waitFor(() => /next steppaste/.test(screen.liveText()), { label: "the typed-ahead text" });
   ui.turnFinish();
   assert.equal(ui.takeTypeAhead(), "next steppaste");
   assert.equal(ui.takeTypeAhead(), "", "handed over only once");
+});
+
+test("Enter during a turn sends the typed text as steering", async () => {
+  const { screen, ui, begin } = setup();
+  begin();
+  screen.type("focus on the tests");
+  screen.press("return");
+  assert.deepEqual(ui.takeSteering(), ["focus on the tests"]);
+  assert.equal(ui.takeTypeAhead(), "", "steering is not left for the next prompt");
+  ui.turnFinish();
 });
 
 test("dispose releases everything", () => {

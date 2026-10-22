@@ -44,7 +44,7 @@ function launch({ origin, env = {}, args = [], io = {} }) {
   const signals = new EventEmitter();
   const done = main(args, {
     screen, stdin: createEmptyStdin(), stdout: createCapture(), stderr, process: signals,
-    env: { FIRAS_ORIGIN: origin, FIRAS_LANG: "en", ...env },
+    env: { FIRAS_ORIGIN: origin, FIRAS_LANG: "en", FIRAS_VERIFY: "0", ...env },
     cwd: work.dir, graceMs: 0, clientOptions: { backoffMs: [1, 1, 1, 1] },
     ...io,
   });
@@ -160,7 +160,7 @@ test("print mode never writes the settings, even for a code that works", async (
   const work = tempDir();
   const out = {
     stdin: createEmptyStdin(), stdout: createCapture(), stderr: createCapture(), process: new EventEmitter(),
-    env: { FIRAS_ORIGIN: service.origin, FIRAS_LANG: "en", FIRAS_CODE: GOOD },
+    env: { FIRAS_ORIGIN: service.origin, FIRAS_LANG: "en", FIRAS_CODE: GOOD, FIRAS_VERIFY: "0" },
     cwd: work.dir, clientOptions: { backoffMs: [1, 1, 1, 1] },
   };
   try {

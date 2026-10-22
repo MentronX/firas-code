@@ -569,6 +569,56 @@ test("a stream that drops after text is continued instead of ending the turn", a
   assert.ok(env.ui.notices().some(n => n.level === "info" && n.text === t("agent.retryingStream")));
 });
 
+test("a message sent while the turn runs steers it at the next step", async () => {
+  let steerAbort = null;
+  let calls = 0;
+  const env = setup({
+    script: [
+      { events: [
+        { type: "block_start", index: 0, block: { type: "thinking" } },
+        { type: "thinking_delta", index: 0, text: "thinking" },
+      ], hangAfter: 2 },
+      textReply("Done with the tests."),
+    ],
+  });
+  const result = await run(env, "hard task", {
+    retryDelayMs: () => 0,
+    takeSteering: () => {
+      calls += 1;
+      if (calls === 1) { setTimeout(() => steerAbort?.(), 10); return []; }
+      return ["focus on the tests"];
+    },
+    onSteerAbort: fn => { steerAbort = fn; },
+  });
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(env.client.calls, 2, "the stopped request is followed by one that carries the steering");
+  assert.ok(env.session.messages.some(m => m.role === "user" && JSON.stringify(m.content).includes("focus on the tests")));
+  assert.equal(textOfMessage(env.session.messages.at(-1)), "Done with the tests.");
+});
+
+test("a turn that changed files is verified, and the verifier's problems are fixed", async () => {
+  let verifications = 0;
+  const env = setup({
+    tools: [fakeTool("Write", { readOnly: false })],
+    script: [
+      toolReply([{ id: "w1", name: "Write", input: { path: "a.js" } }], { text: "Writing." }),
+      textReply("Done."),
+      textReply("Fixed the test."),
+    ],
+  });
+  const result = await run(env, "write a.js", {
+    verify: async ({ changed }) => {
+      verifications += 1;
+      assert.deepEqual(changed, ["a.js"]);
+      return verifications === 1 ? { ok: false, report: "The test fails: expected 2, got 1." } : { ok: true };
+    },
+  });
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(verifications, 1, "the verifier runs once per turn");
+  assert.ok(env.session.messages.some(m => m.role === "user" && JSON.stringify(m.content).includes("[Verifier]")));
+  assert.equal(textOfMessage(env.session.messages.at(-1)), "Fixed the test.");
+});
+
 test("a UI that throws cannot break the turn", async () => {
   const ui = fakeUi();
   const flaky = new Proxy(ui, { get: (t, k) => (k === "textDelta" || k === "toolEnd" ? () => { throw new Error("render bug"); } : t[k]) });

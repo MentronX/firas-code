@@ -28,7 +28,8 @@ import { createServiceClient } from "./link/client.js";
 import { isAbortError } from "./link/errors.js";
 import { createSession, loadSession, latestSession, listSessions } from "./agent/session.js";
 import { runUserTurn } from "./agent/loop.js";
-import { createAgentTool } from "./agent/subagent.js";
+import { detectGit } from "./agent/prompt.js";
+import { createAgentTool, runVerifier } from "./agent/subagent.js";
 import { createToolbox, createPermissionEngine } from "./tools/index.js";
 import { createScreen } from "./ui/screen.js";
 import { readPrompt as defaultReadPrompt } from "./ui/input.js";
@@ -353,7 +354,9 @@ async function run(args, io) {
   // for one with them, in the background (src/ui/winfont.js). Never in tests, where nothing global may change.
   const fontFix = !io.injected && shouldFixConsoleFont({ env, stdout }) ? fixConsoleFont({ env, title: wantsPrint ? "" : windowTitle(cwd) }) : null;
 
-  const shared = { opts, config, cwd, env, io, stdin, stdout, stderr, makeClient, fontFix };
+  // The automatic verifier is on by default; FIRAS_VERIFY=0 turns it off for scripted runs and tests.
+  const verifyEnabled = !/^(0|off|false|no)$/i.test(String(env.FIRAS_VERIFY || "").trim());
+  const shared = { opts, config, cwd, env, io, stdin, stdout, stderr, makeClient, fontFix, verifyEnabled };
   return wantsPrint ? runPrint(shared) : runInteractive(shared);
 }
 
@@ -415,14 +418,19 @@ function skillSourceFor(cwd) {
   return createSkillSource(cwd, { reserved: isCommandName });
 }
 
-function buildEngine({ ui, client, config, session, cwd, mode, effortRef, skills }) {
+function buildEngine({ ui, client, config, session, cwd, mode, effortRef, skills, verifyEnabled = true }) {
   const permissions = createPermissionEngine({ mode, cwd, ui, config });
   let toolbox = null;
   const base = () => ({ client, ui, permissions, toolbox: () => toolbox, getEffort: () => effortRef.value });
   // The tool is rebuilt per call so the sub-agent follows /lang and /effort made after start-up.
   const agentTool = { ...createAgentTool({ ...base(), lang: getLang() }), run: (input, ctx) => createAgentTool({ ...base(), lang: getLang() }).run(input, ctx) };
   toolbox = createToolbox({ cwd, ui, client, config, session, mode, permissions, extraTools: [agentTool], skills: skills || skillSourceFor(cwd) });
-  return { permissions, toolbox };
+  // The automatic verifier: a read-and-test sub-agent that checks a turn which changed files.
+  // FIRAS_VERIFY=0 turns it off (tests and scripted runs use that).
+  const verify = verifyEnabled
+    ? ({ changed, request, signal }) => runVerifier({ client, toolbox, permissions, config, lang: getLang(), cwd, request, changed, signal })
+    : undefined;
+  return { permissions, toolbox, verify };
 }
 
 /** "/name args" for an installed skill (and not a command) becomes the skill's message; anything else is unchanged. */
@@ -436,7 +444,7 @@ function skillPrompt(text, skills) {
 // ---------------------------------------------------------------------------------------------------------------------
 // Print mode
 
-async function runPrint({ opts, config, cwd, env, io, stdin, stdout, stderr, makeClient }) {
+async function runPrint({ opts, config, cwd, env, io, stdin, stdout, stderr, makeClient, verifyEnabled }) {
   const notify = (level, text) => writeLine(stderr, `${level === "error" ? sym.cross : level === "warn" ? sym.warn : sym.info} ${text}`);
   if (!config.code) { notify("error", t("app.print.noCode")); return 1; }
 
@@ -452,7 +460,7 @@ async function runPrint({ opts, config, cwd, env, io, stdin, stdout, stderr, mak
   const client = withRetryNotice(makeClient(() => config.code), info => ui.notice("info", retryText(info)));
   const { session } = openSession({ opts, cwd, mode, notify });
   const skills = skillSourceFor(cwd);
-  const { permissions, toolbox } = buildEngine({ ui, client, config, session, cwd, mode, effortRef, skills });
+  const { permissions, toolbox, verify } = buildEngine({ ui, client, config, session, cwd, mode, effortRef, skills, verifyEnabled });
   // `-p "/review"` runs the skill the same way typing /review does; commands do not exist in print mode.
   const message = skillPrompt(prompt, skills);
 
@@ -462,7 +470,7 @@ async function runPrint({ opts, config, cwd, env, io, stdin, stdout, stderr, mak
   proc?.on?.("SIGINT", onSignal);
   proc?.on?.("SIGTERM", onSignal);
   try {
-    const result = await runUserTurn({ session, text: message, ui, client, toolbox, permissions, effort: mentionsUltra(prompt) ? "ultracode" : effortRef.value, signal: control.signal, lang: getLang(), config });
+    const result = await runUserTurn({ session, text: message, ui, client, toolbox, permissions, effort: mentionsUltra(prompt) ? "ultracode" : effortRef.value, signal: control.signal, lang: getLang(), config, verify });
     ui.finish();
     session.save();
     return exitCodeFor(result.stopReason);
@@ -475,6 +483,12 @@ async function runPrint({ opts, config, cwd, env, io, stdin, stdout, stderr, mak
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Interactive mode
+
+/** The footer's git part: the branch, with * when the working tree has changes. */
+function gitStatus(git) {
+  if (!git?.isRepo || !git.branch) return "";
+  return `${git.branch}${git.dirty ? "*" : ""}`;
+}
 
 function recap(session, ui, width) {
   const messages = session.messages;
@@ -491,16 +505,17 @@ function recap(session, ui, width) {
   }
 }
 
-async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stderr, makeClient, fontFix }) {
+async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stderr, makeClient, fontFix, verifyEnabled }) {
   const proc = io.process || (io.injected ? null : process);
   const readPrompt = io.readPrompt || defaultReadPrompt;
   const screen = io.screen || createScreen({ stdin, stdout, env });
-  const app = { exitCode: null, effort: { value: opts.effort || config.effort || "medium" }, turnAbort: null, session: null, firstPrompt: opts.prompt.trim() };
+  const app = { exitCode: null, effort: { value: opts.effort || config.effort || "medium" }, turnAbort: null, session: null, firstPrompt: opts.prompt.trim(), git: null };
   const lifeline = new AbortController();
   const mode = opts.yolo ? "bypass" : opts.mode || config.mode || "default";
   let ui = null;
   let permissions = null;
   let toolbox = null;
+  let verify = null;
   let client = null;
   let disposed = false;
   // One key listener for the whole session. Switching the terminal input off and on again between a turn and the
@@ -555,10 +570,12 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
 
     const { session, resumed } = openSession({ opts, cwd, mode, notify: (level, text) => ui.notice(level, text), pickLater: true });
     app.session = session;
+    app.git = await detectGit(cwd);
     const skills = skillSourceFor(cwd);
-    const engine = buildEngine({ ui, client, config, session, cwd, mode, effortRef: app.effort, skills });
+    const engine = buildEngine({ ui, client, config, session, cwd, mode, effortRef: app.effort, skills, verifyEnabled });
     permissions = engine.permissions;
     toolbox = engine.toolbox;
+    verify = engine.verify;
 
     ui.printRaw(renderBanner({ width: screen.width(), cwd, effort: app.effort.value, mode, lang: getLang(), version: VERSION, resumed }));
     if (config.recovered) ui.notice("warn", t("app.config.recovered"));
@@ -602,10 +619,15 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
       try {
         // Naming ultracode in a message gives that one message the top level; the setting itself does not change.
         const effort = mentionsUltra(text) ? "ultracode" : app.effort.value;
-        return await runUserTurn({ session: app.session, text, ui, client, toolbox, permissions, effort, signal: control.signal, lang: getLang(), config });
+        return await runUserTurn({
+          session: app.session, text, ui, client, toolbox, permissions, effort, signal: control.signal, lang: getLang(), config,
+          takeSteering: ui.takeSteering, onSteerAbort: ui.onSteerAbort, verify,
+        });
       } finally {
         endTurn();
         keep(app.session);
+        // The branch and the dirty mark in the footer follow the work the turn just did.
+        app.git = await detectGit(cwd);
       }
     };
 
@@ -675,7 +697,7 @@ async function runInteractive({ opts, config, cwd, env, io, stdin, stdout, stder
       // Rebuilt for every prompt: the skills are looked up again, so a new SKILL.md is in the menu right away.
       commands: commandMenu({ skills: skills.list() }),
       files: query => files.files(query),
-      footer: () => [footerLine(permissions, app.effort, screen.width())],
+      footer: () => [footerLine(permissions, app.effort, screen.width(), gitStatus(app.git))],
       onShiftTab: () => { permissions.cycleMode(); app.session.mode = permissions.mode; },
       onExpand: () => ui.expandLast(),
       signal: lifeline.signal,

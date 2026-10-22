@@ -30,7 +30,7 @@ async function session({ script = [], files = {}, fn }) {
       stdin: createEmptyStdin(),
       stdout: createCapture(),
       stderr: createCapture(),
-      env: { FIRAS_LANG: "en", FIRAS_ORIGIN: service.origin },
+      env: { FIRAS_LANG: "en", FIRAS_ORIGIN: service.origin, FIRAS_VERIFY: "0" },
       cwd: work.dir,
       process: new EventEmitter(),
       clientOptions: { backoffMs: [1, 1, 1, 1] },

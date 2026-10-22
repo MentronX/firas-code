@@ -5,6 +5,7 @@ import { MODEL_ID } from "../brand.js";
 import { t } from "../i18n/index.js";
 import "./strings.js";
 import { buildSystemPrompt, detectGit, formatDate, loadProjectInstructions, ULTRACODE_NOTE } from "./prompt.js";
+import { readMemory } from "./memory.js";
 import { discoverSkills } from "../skills/index.js";
 import { estimateTokens, maybeCompact, pruneForRequest } from "./context.js";
 import { INTERRUPTED_RESULT, contentBlocks, makeToolResult, repairMessages, sanitizeAssistantContent, textOf, toolResultsOf, toolUsesOf } from "./messages.js";
@@ -465,6 +466,12 @@ export async function runAgentLoop(options) {
   const ui = safeUi(options.ui);
   const signal = options.signal ?? new AbortController().signal;
   const retryDelay = typeof options.retryDelayMs === "function" ? options.retryDelayMs : n => (n === 1 ? 1000 : 3000);
+  // Steering: messages the person sends while the turn runs. They are added at the next step, and the
+  // current request can be stopped without ending the turn so the model reads them now.
+  const takeSteering = typeof options.takeSteering === "function" ? options.takeSteering : () => [];
+  const onSteerAbort = typeof options.onSteerAbort === "function" ? options.onSteerAbort : () => {};
+  // The automatic verifier: called once after a turn that changed files, before the final answer stands.
+  const verify = typeof options.verify === "function" ? options.verify : null;
   const turn = options.turn ?? { permLock: Promise.resolve() };
   const fileState = options.fileState ?? toolbox.fileState ?? session.fileState;
   const toolDefs = toolbox.definitions();
@@ -474,6 +481,8 @@ export async function runAgentLoop(options) {
   let steps = 0;
   let continuations = 0;
   let streamRetries = 0;
+  let verified = false;
+  const changed = new Set();
   let emptyRetried = false;
   let tooLargeRetried = false;
   let compactBlocked = false;
@@ -493,6 +502,13 @@ export async function runAgentLoop(options) {
   try {
     while (true) {
       if (signal.aborted) { stopReason = "aborted"; break; }
+      // Steering that arrived between steps: the model reads it before the next request.
+      const queued = takeSteering();
+      if (queued.length) {
+        for (const text of queued) session.addUser(`[Steering] ${text}`);
+        save();
+        ui.notice("info", t("agent.steering", { n: queued.length }));
+      }
       if (steps >= maxSteps) {
         ui.notice("warn", t("agent.maxSteps", { n: maxSteps }));
         // A hard task that hits the ceiling still ends with words: ask for a closing summary with no tools.
@@ -520,9 +536,19 @@ export async function runAgentLoop(options) {
 
       steps += 1;
       const request = buildRequest({ system, tools: toolDefs, messages: requestMessages(session), effort });
+      // A steering message stops this request without ending the turn; Esc still aborts the whole turn.
+      const requestControl = new AbortController();
+      const onTurnAbort = () => requestControl.abort();
+      signal.addEventListener("abort", onTurnAbort, { once: true });
+      onSteerAbort(() => requestControl.abort());
       ui.requestStart({ step: steps, effort });
       let res;
-      try { res = await streamOnce({ client, request, signal, ui }); } finally { ui.requestEnd(); }
+      try { res = await streamOnce({ client, request, signal: requestControl.signal, ui }); }
+      finally {
+        ui.requestEnd();
+        signal.removeEventListener("abort", onTurnAbort);
+        onSteerAbort(null);
+      }
 
       if (res.usage.input !== undefined || res.usage.output !== undefined || res.blocks.length) {
         const input = res.usage.input ?? estimateTokens(request.messages, request.system, request.tools);
@@ -532,6 +558,20 @@ export async function runAgentLoop(options) {
         usage.outputTokens += output;
         session.contextTokens = input + output;
         ui.usage({ inputTokens: session.usage.inputTokens, outputTokens: session.usage.outputTokens, contextTokens: session.contextTokens });
+      }
+
+      // A steering message stopped this request: keep what was shown, add the message, and continue.
+      if (res.aborted && !signal.aborted) {
+        const steer = takeSteering();
+        if (steer.length) {
+          const partial = res.blocks.filter(b => b.type === "text" && b.text.trim()).map(b => ({ type: "text", text: b.text }));
+          if (partial.length) session.addAssistant({ content: partial });
+          for (const text of steer) session.addUser(`[Steering] ${text}`);
+          save();
+          steps -= 1; // a steer is not a new step
+          ui.notice("info", t("agent.steering", { n: steer.length }));
+          continue;
+        }
       }
 
       // A stream that broke before any text was shown is retried here: the link layer gives up after
@@ -608,9 +648,14 @@ export async function runAgentLoop(options) {
         continuations = 0;
         finalText = "";
         narration = said;
+        for (const call of calls) {
+          if ((call.name === "Write" || call.name === "Edit" || call.name === "MultiEdit") && call.input?.path) changed.add(String(call.input.path));
+        }
         const blocks = await runner.runCalls(calls);
         session.addToolResults(blocks);
         save();
+        // A restore point after every tool step: /rewind can go back to the conversation as it was here.
+        session.checkpoint?.("after tools");
         if (signal.aborted) { stopReason = "aborted"; break; }
         continue;
       }
@@ -626,6 +671,24 @@ export async function runAgentLoop(options) {
         ui.notice("warn", t("agent.maxTokens"));
         session.addUser(CONTINUE_TEXT);
         continue;
+      }
+
+      // A turn that changed files is checked once by the verifier before the answer stands.
+      if (verify && !verified && changed.size) {
+        verified = true;
+        ui.notice("info", t("agent.verifying"));
+        let verdict = null;
+        try {
+          const request = session.messages.find(m => m.role === "user")?.content?.find(b => b.type === "text")?.text || "";
+          verdict = await verify({ changed: [...changed], request, signal });
+        } catch { /* a verifier failure must not fail the turn */ }
+        if (verdict && !verdict.ok && verdict.report) {
+          session.addUser(`[Verifier] ${verdict.report}\n\nFix the real problems above, then finish.`);
+          save();
+          ui.notice("warn", t("agent.verifyIssues"));
+          continue;
+        }
+        if (verdict?.ok) ui.notice("info", t("agent.verified"));
       }
 
       stopReason = "end_turn";
@@ -653,6 +716,7 @@ function promptSkills(toolbox, cwd, toolNames) {
 async function composeSystem({ session, toolbox, permissions, lang, signal }) {
   const git = await detectGit(session.cwd, undefined, signal);
   const projectInstructions = loadProjectInstructions(session.cwd);
+  const memory = readMemory(session.cwd);
   const toolNames = (toolbox.tools || []).map(tool => tool.name);
   const skills = promptSkills(toolbox, session.cwd, toolNames);
   const date = formatDate(new Date());
@@ -663,6 +727,7 @@ async function composeSystem({ session, toolbox, permissions, lang, signal }) {
     date,
     lang,
     projectInstructions,
+    memory,
     git,
     mode: permissions.mode || session.mode || "default",
     toolNames,
@@ -675,7 +740,7 @@ async function composeSystem({ session, toolbox, permissions, lang, signal }) {
  * returning one) replaces the generated prompt; tests and callers that already built one use it.
  * Resolves with `{ stopReason, steps, usage }`; never rejects.
  */
-export async function runUserTurn({ session, text, ui, client, toolbox, permissions, effort, signal, lang = "en", config, system, retryDelayMs }) {
+export async function runUserTurn({ session, text, ui, client, toolbox, permissions, effort, signal, lang = "en", config, system, retryDelayMs, takeSteering, onSteerAbort, verify }) {
   const u = safeUi(ui);
   const abortSignal = signal ?? new AbortController().signal;
   const startedAt = Date.now();
@@ -699,6 +764,9 @@ export async function runUserTurn({ session, text, ui, client, toolbox, permissi
       system: ultra ? withUltracode(prompt) : prompt,
       maxSteps: ultra ? ULTRA_MAX_STEPS : MAX_STEPS,
       retryDelayMs,
+      takeSteering,
+      onSteerAbort,
+      verify,
     });
   } catch (err) {
     u.notice("error", t("agent.internalError") + (process.env.FIRAS_DEBUG ? ` (${err?.message || err})` : ""));

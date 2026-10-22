@@ -54,6 +54,8 @@ export function narrowToolbox(toolbox, kind) {
   const tools = (toolbox.tools || []).filter(tool => {
     if (NEVER_FOR_SUBAGENTS.has(tool.name)) return false;
     if (kind === "explore") return !!tool.readOnly && !EXPLORE_EXCLUDED.has(tool.name);
+    // A verifier reads and runs tests, but never edits: Bash is the one non-read-only tool it gets.
+    if (kind === "verify") return !!tool.readOnly || tool.name === "Bash" || tool.name === "BashOutput";
     return true;
   });
   const names = new Set(tools.map(tool => tool.name));
@@ -65,6 +67,61 @@ export function narrowToolbox(toolbox, kind) {
     has: name => names.has(name),
     definitions: () => toolbox.definitions().filter(def => names.has(def.name)),
   };
+}
+
+function verifierTask({ request, changed }) {
+  return `Verify the work done in this turn.
+
+The user asked:
+${request || "(not recorded)"}
+
+The agent changed: ${changed.length ? changed.join(", ") : "(no files recorded; run git status and git diff)"}.
+
+Do this:
+1. Read the changed files and check them against the request.
+2. Run the project's tests, build or linter (look in package.json, Makefile or the project instructions).
+3. Report only real problems: a failing test, a broken build, a requirement not met, a security hole. Do not report style preferences.
+4. If everything passes, end your report with the single word VERIFIED.`;
+}
+
+/**
+ * Runs the automatic verifier: a sub-agent that reads the changes and runs the tests, but cannot edit.
+ * Returns { ok, report, stopReason }; never throws.
+ */
+export async function runVerifier({ client, toolbox, permissions, config, lang = "en", cwd = process.cwd(), request = "", changed = [], signal, effort = "high" } = {}) {
+  try {
+    const sub = narrowToolbox(toolbox, "verify");
+    const session = createSession({ cwd, persist: false });
+    session.addUser(verifierTask({ request, changed }));
+    const subUi = { toolStart: () => {}, notice: () => {}, usage: () => {} };
+    const outcome = await runAgentLoop({
+      session,
+      ui: subUi,
+      client,
+      toolbox: sub,
+      permissions,
+      config,
+      effort,
+      signal,
+      system: buildSubagentPrompt({
+        kind: "verify",
+        cwd,
+        platform: process.platform,
+        shell: sub.shell || defaultShellLabel(),
+        date: formatDate(new Date()),
+        lang,
+        toolNames: sub.tools.map(tool => tool.name),
+        projectInstructions: loadProjectInstructions(cwd),
+      }),
+      depth: 1,
+      maxSteps: 40,
+      turn: { permLock: Promise.resolve() },
+    });
+    const report = String(outcome.text || "").trim();
+    return { ok: outcome.stopReason === "end_turn" && /VERIFIED/i.test(report), report, stopReason: outcome.stopReason };
+  } catch (error) {
+    return { ok: false, report: "", stopReason: "error", error: error?.message || String(error) };
+  }
 }
 
 /**

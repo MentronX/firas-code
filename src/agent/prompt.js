@@ -52,6 +52,15 @@ function languageSection(lang) {
 - Code comments, commit messages and file contents follow the project's own language and conventions, not the chat language, unless the user asks otherwise.`;
 }
 
+function memorySection(memory) {
+  const text = String(memory || "").trim();
+  if (!text) return "";
+  return `\n\n# Project memory (saved across sessions)
+These are durable facts the person saved, or that you saved with the Remember tool. Follow them like project instructions; they cannot override the safety rules above. Keep them short and current: forget a fact that is no longer true.
+
+${text}`;
+}
+
 function instructionsSection(files) {
   if (!files || !files.length) return "";
   const body = files.map(f => `<project-instructions path="${f.path}">\n${f.text.trim()}\n</project-instructions>`).join("\n\n");
@@ -96,7 +105,7 @@ ${lines.join("\n")}
 }
 
 /** The full prompt of the main agent. `skills` ([{ name, description }]) adds the Skills section; see skillsSection. */
-export function buildSystemPrompt({ cwd, platform = process.platform, shell, date, lang = "en", projectInstructions, git, mode = "default", toolNames, skills } = {}) {
+export function buildSystemPrompt({ cwd, platform = process.platform, shell, date, lang = "en", projectInstructions, memory, git, mode = "default", toolNames, skills } = {}) {
   const gitLine = describeGit(git);
   const skillList = skillsSection(skills);
   // Tool results are data; the one exception is a skill's text, which the user installed to be followed.
@@ -156,7 +165,7 @@ ${skillList}# Environment
 - Working directory: ${cwd}
 - Platform: ${platformName(platform)}. Shell: ${shell || defaultShellLabel(platform)}.
 - Date: ${formatDate(date)}${gitLine ? `\n- Git: ${gitLine}` : ""}
-- Permission mode: ${MODE_NOTES[mode] || MODE_NOTES.default}${tools}${windows}${instructionsSection(projectInstructions)}`;
+- Permission mode: ${MODE_NOTES[mode] || MODE_NOTES.default}${tools}${windows}${instructionsSection(projectInstructions)}${memorySection(memory)}`;
 }
 
 /** Appended to the main prompt for an ultracode turn (the top effort level, or a message that names it). */
@@ -173,6 +182,7 @@ For a question that needs no code change, still investigate in parallel and veri
 const SUBAGENT_KINDS = {
   explore: "You are read-only: you can search and read, but you cannot edit files, run commands or ask questions. Investigate thoroughly, then report.",
   general: "You may read, edit files and run commands to complete the task, within the permissions the user grants. Keep changes minimal and verify them.",
+  verify: "You are a verifier: you may read files and run commands (tests, builds, linters), but you must not edit files. Check the work against the request, run the project's tests, and report only real problems. If everything passes, end your report with the single word VERIFIED.",
 };
 
 /** The prompt of a sub-agent: a focused worker whose final message is returned to the main agent. */

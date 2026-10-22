@@ -149,6 +149,60 @@ export class Session {
     this.contextTokens = 0;
   }
 
+  checkpointDir() { return path.join(sessionsDir(), `${this.id}.checkpoints`); }
+
+  /**
+   * Writes a snapshot of the conversation (messages only; files are not copied) and keeps the newest 20.
+   * Best effort: a full disk or a locked file returns null and never stops the turn.
+   */
+  checkpoint(label = "") {
+    if (!this.persist) return null;
+    const dir = this.checkpointDir();
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const at = new Date().toISOString();
+      const file = path.join(dir, `${at.replace(/[:.]/g, "-")}.json`);
+      writePrivate(file, JSON.stringify({ ...this.toJSON(), checkpoint: { label: String(label || "").slice(0, 80), at } }));
+      const names = fs.readdirSync(dir).filter(name => name.endsWith(".json")).sort();
+      for (const old of names.slice(0, Math.max(0, names.length - 20))) {
+        try { fs.unlinkSync(path.join(dir, old)); } catch { /* keep going */ }
+      }
+      return file;
+    } catch { return null; }
+  }
+
+  /** Newest first: { file, at, label, messageCount }. */
+  listCheckpoints() {
+    const dir = this.checkpointDir();
+    let names;
+    try { names = fs.readdirSync(dir).filter(name => name.endsWith(".json")); } catch { return []; }
+    const out = [];
+    for (const name of names) {
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
+        out.push({
+          file: path.join(dir, name),
+          at: data.checkpoint?.at || data.updatedAt || "",
+          label: data.checkpoint?.label || "",
+          messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
+        });
+      } catch { /* a corrupt checkpoint is skipped */ }
+    }
+    out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    return out;
+  }
+
+  /** Replaces the conversation with a checkpoint's messages. Files are not reverted. */
+  restoreCheckpoint(file) {
+    try {
+      const data = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!Array.isArray(data.messages)) return false;
+      this.replaceMessages(repairMessages(withoutThinking(data.messages)).messages);
+      this.save();
+      return true;
+    } catch { return false; }
+  }
+
   /** Forgets the conversation but keeps the id and the file. */
   clear() {
     this.messages = [];

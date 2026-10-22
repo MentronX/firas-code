@@ -19,6 +19,7 @@ import { createAskUserTool } from "./askuser.js";
 import { createExitPlanTool } from "./exitplan.js";
 import { createLibraryTool } from "./library.js";
 import { createSkillTool } from "./skill.js";
+import { createRememberTool } from "./remember.js";
 import { asSkillSource, createSkillSource } from "../skills/index.js";
 import { createJobs } from "./jobs.js";
 import { resolveShell } from "./shell.js";
@@ -62,6 +63,7 @@ export function createToolbox({ cwd = process.cwd(), ui, client, config, session
     createGlobTool(), createGrepTool(), createLsTool(), createWebFetchTool(webFetch),
     createTodoTool(), createAskUserTool(), createExitPlanTool(), createLibraryTool(),
     createSkillTool({ getSkills: () => skillSource.list() }),
+    createRememberTool(),
   ].map(revealSummaries).concat(extraTools);
   const byName = new Map();
   for (const tool of tools) {

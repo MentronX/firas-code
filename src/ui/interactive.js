@@ -94,6 +94,9 @@ export function createInteractiveUi({
     timer: null,
     typeAhead: "",
     pendingLines: [],
+    // Messages typed and sent while the turn runs (Enter): the loop injects them at its next step.
+    steer: [],
+    steerAbort: null,
   };
 
   const width = () => contentWidth(screen.width());
@@ -164,9 +167,11 @@ export function createInteractiveUi({
     const bar = spinner.line(w);
     if (bar) lines.push(GUTTER + bar);
     if (state.typeAhead) {
-      // What the person has typed for their next message while the agent works (it goes into the next prompt).
+      // What the person has typed while the agent works: Enter sends it as steering, otherwise it becomes
+      // the next prompt.
       const shown = truncateLogical(state.typeAhead.replace(/\s+/g, " "), Math.max(8, w - 4));
-      lines.push(...para(c.dim(`${sym.prompt} ${shown}`), w, { dir: "auto" }).map(line => GUTTER + line));
+      const hint = c.dim(`  ${t("app.steer.hint")}`);
+      lines.push(...para(c.dim(`${sym.prompt} ${shown}`) + hint, w, { dir: "auto" }).map(line => GUTTER + line));
     }
     const limit = Math.max(3, screen.height() - 1);
     setLive(shift(lines.length > limit ? lines.slice(lines.length - limit) : lines), null);
@@ -241,7 +246,20 @@ export function createInteractiveUi({
     }
     if (ctrlLetter(key, "o")) { ui.expandLast(); return; }
     if (key.name === "backtab") { cycleMode?.(); schedule(); return; }
-    // Anything else typed while the agent works is kept for the next prompt (Enter does not send it).
+    // Enter sends what was typed as steering: the loop adds it to the running turn at its next step, and the
+    // current request is stopped so the model reads it now instead of after the answer.
+    if (key.name === "return" || key.name === "enter") {
+      const text = state.typeAhead.trim();
+      if (text) {
+        state.steer.push(text);
+        state.typeAhead = "";
+        state.steerAbort?.();
+        spinner.set({ label: t("app.steer.sent") });
+        render();
+      }
+      return;
+    }
+    // Anything else typed while the agent works is kept for the next prompt.
     if (key.name === "char" && !key.ctrl && !key.alt && key.ch) state.typeAhead += key.ch;
     else if (key.name === "paste" && key.paste) state.typeAhead += key.paste.replace(/\n+$/, "");
     else if (key.name === "backspace") state.typeAhead = [...state.typeAhead].slice(0, -1).join("");
@@ -529,6 +547,8 @@ export function createInteractiveUi({
       state.liveChars = 0;
       state.answerAcc = "";
       state.stepHadTools = false;
+      state.steer = [];
+      state.steerAbort = null;
       state.lastLive = null;
       turnHandler = onTurnKey;
       holdKeys();
@@ -547,6 +567,12 @@ export function createInteractiveUi({
       state.tools.clear();
       state.thinking = null;
       state.partial = "";
+      state.steerAbort = null;
+      // Steering that arrived after the loop's last step becomes the next prompt instead of being lost.
+      if (state.steer.length) {
+        state.typeAhead = [state.typeAhead, ...state.steer].filter(Boolean).join("\n");
+        state.steer = [];
+      }
       turnHandler = null;
       state.lastLive = null;
       releaseKeys();
@@ -559,6 +585,14 @@ export function createInteractiveUi({
       state.typeAhead = "";
       return text;
     },
+    /** Messages sent while the turn runs; the loop takes them at its next step. */
+    takeSteering() {
+      const list = state.steer;
+      state.steer = [];
+      return list;
+    },
+    /** The loop registers how to stop the current request without ending the turn. */
+    onSteerAbort(fn) { state.steerAbort = typeof fn === "function" ? fn : null; },
 
     print: lines => emit(lines),
     printRaw: lines => printRaw(lines),

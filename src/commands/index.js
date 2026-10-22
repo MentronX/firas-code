@@ -32,6 +32,9 @@ import { copyCommand } from "./copy.js";
 import { initCommand } from "./init.js";
 import { resumeCommand } from "./resume.js";
 import { sessionsCommand } from "./sessions.js";
+import { checkpointCommand } from "./checkpoint.js";
+import { rewindCommand } from "./rewind.js";
+import { memoryCommand } from "./memory.js";
 import { logoutCommand } from "./logout.js";
 import { updateCommand } from "./update.js";
 import { exitCommand } from "./exit.js";
@@ -39,8 +42,8 @@ import { skillsCommand } from "./skills.js";
 
 export const COMMANDS = Object.freeze([
   helpCommand, clearCommand, compactCommand, effortCommand, modeCommand, langCommand, arabicCommand, modelCommand,
-  statusCommand, costCommand, copyCommand, initCommand, skillsCommand, resumeCommand, sessionsCommand, logoutCommand,
-  updateCommand, exitCommand,
+  statusCommand, costCommand, copyCommand, initCommand, skillsCommand, resumeCommand, sessionsCommand,
+  checkpointCommand, rewindCommand, memoryCommand, logoutCommand, updateCommand, exitCommand,
 ]);
 
 /** { name, args } for a slash command line, or null when the text is an ordinary message. */

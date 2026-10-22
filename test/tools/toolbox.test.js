@@ -9,7 +9,7 @@ import { setup } from "./helpers.js";
 import { banned, skipNoList } from "../helpers/banned.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const NAMES = ["Read", "Write", "Edit", "MultiEdit", "Bash", "BashOutput", "KillShell", "Glob", "Grep", "LS", "WebFetch", "TodoWrite", "AskUserQuestion", "ExitPlanMode", "UiLibrary", "Skill"];
+const NAMES = ["Read", "Write", "Edit", "MultiEdit", "Bash", "BashOutput", "KillShell", "Glob", "Grep", "LS", "WebFetch", "TodoWrite", "AskUserQuestion", "ExitPlanMode", "UiLibrary", "Skill", "Remember"];
 
 test("the toolbox has every tool, in order, with its documented name", () => {
   const tb = createToolbox({ cwd: process.cwd() });

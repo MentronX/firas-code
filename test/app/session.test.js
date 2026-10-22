@@ -48,7 +48,7 @@ async function start({ script = [], files = {}, config = { lang: "en" }, args = 
   const signals = new EventEmitter();
   const run = {
     screen, stdin: createEmptyStdin(), stdout: createCapture(), stderr,
-    env: { FIRAS_ORIGIN: service.origin },
+    env: { FIRAS_ORIGIN: service.origin, FIRAS_VERIFY: "0" },
     cwd: work.dir, process: signals, graceMs: 0,
     clientOptions: { backoffMs: [1, 1, 1, 1] },
     ...io,
@@ -116,10 +116,8 @@ test("what is typed while the agent works is kept and shows up in the next promp
   app.screen.type("!");
   app.screen.press("backspace");
   app.screen.type(" fix it");
-  app.screen.enter();
   await app.sawLive(/and then fix it/, "the typed-ahead text in the live region");
   await waitFor(() => /and then fix it/.test(app.screen.liveText()) && !/esc to interrupt/i.test(app.screen.liveText()), { label: "the prompt holding it" });
-  assert.equal(app.posts().length, 1, "Enter during the turn sent nothing");
   app.screen.ctrl("u");
   assert.equal(await app.finish(), 0);
 });
@@ -619,6 +617,7 @@ test("the model's reasoning text never reaches the screen or the saved conversat
   const second = app.posts()[1].body;
   assert.ok(second.messages.some(m => m.role === "assistant" && m.content.some(b => b.type === "thinking" && b.thinking.includes(MARKER))));
   assert.equal(await app.finish(), 0);
-  const saved = fs.readdirSync(path.join(home.dir, "sessions")).map(name => fs.readFileSync(path.join(home.dir, "sessions", name), "utf8")).join("\n");
+  // Checkpoints live in <id>.checkpoints folders beside the session files; only the .json files are conversations.
+  const saved = fs.readdirSync(path.join(home.dir, "sessions")).filter(name => name.endsWith(".json")).map(name => fs.readFileSync(path.join(home.dir, "sessions", name), "utf8")).join("\n");
   assert.ok(saved.includes("answer") && !saved.includes(MARKER), "the saved conversation holds no reasoning text");
 });

@@ -34,6 +34,10 @@ registerStrings("tools", {
     "perm.ask": "طرح سؤال",
     "perm.plan": "عرض الخطة",
     "perm.skill": "تحميل المهارة {name}",
+    "perm.remember": "حفظ معلومة في ذاكرة المشروع",
+    "remember.saved": "حُفظت المعلومة",
+    "remember.listed": "{n} معلومة محفوظة",
+    "remember.forgot": "حُذفت {n} معلومة",
 
     // why a command is risky
     "risk.elevated": "يعمل بصلاحيات المدير",
@@ -69,6 +73,8 @@ registerStrings("tools", {
 
     // short failure summaries on tool cards
     "err.badPath": "مسار غير صالح",
+    "err.empty": "القيمة فارغة",
+    "err.memoryFull": "ذاكرة المشروع ممتلئة، احذف معلومة قديمة أولا",
     "err.notFound": "غير موجود: {file}",
     "err.isDir": "{file} مجلد وليس ملفا",
     "err.notDir": "{file} ملف وليس مجلدا",
@@ -196,6 +202,10 @@ registerStrings("tools", {
     "perm.ask": "Ask a question",
     "perm.plan": "Present the plan",
     "perm.skill": "Load the {name} skill",
+    "perm.remember": "Save a project fact",
+    "remember.saved": "Fact saved",
+    "remember.listed": "{n} saved facts",
+    "remember.forgot": "Forgot {n} facts",
 
     "risk.elevated": "Runs with administrator rights",
     "risk.recursiveDelete": "Deletes many files at once (a drive root, your home folder, or everything in a folder)",
@@ -229,6 +239,8 @@ registerStrings("tools", {
     "risk.unparsed": "Could not be fully analysed",
 
     "err.badPath": "Invalid path",
+    "err.empty": "The value is empty",
+    "err.memoryFull": "The project memory is full; forget a stale fact first",
     "err.notFound": "Not found: {file}",
     "err.isDir": "{file} is a folder, not a file",
     "err.notDir": "{file} is a file, not a folder",

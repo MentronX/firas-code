@@ -26,7 +26,8 @@ after(() => { setColorLevel(colorBefore); setLang("en"); setArabicMode("auto"); 
 
 const savedConversations = () => {
   const dir = path.join(home.dir, "sessions");
-  return fs.existsSync(dir) ? fs.readdirSync(dir).map(name => fs.readFileSync(path.join(dir, name), "utf8")).join("\n") : "";
+  // Checkpoints live in <id>.checkpoints folders beside the session files; only the .json files are conversations.
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter(name => name.endsWith(".json")).map(name => fs.readFileSync(path.join(dir, name), "utf8")).join("\n") : "";
 };
 
 /** What the loop does with a thinking block: start, many small deltas, end. */
@@ -126,7 +127,7 @@ test("print mode: not on stdout, not on stderr, not in the saved conversation; t
       );
       const out = {
         stdin: createEmptyStdin(), stdout: createCapture({ isTTY: stdoutIsTty }), stderr: createCapture(),
-        env: { FIRAS_LANG: "en", FIRAS_ORIGIN: service.origin }, cwd: work.dir, process: new EventEmitter(),
+        env: { FIRAS_LANG: "en", FIRAS_ORIGIN: service.origin, FIRAS_VERIFY: "0" }, cwd: work.dir, process: new EventEmitter(),
         clientOptions: { backoffMs: [1, 1, 1, 1] },
       };
       assert.equal(await main(["-p", "read a.txt"], out), 0);

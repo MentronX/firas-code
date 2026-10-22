@@ -240,6 +240,21 @@ test("repairMessages leaves a valid history alone and fixes the common breakages
   assert.equal(withNull.messages[1].content[0].text, "ok");
 });
 
+test("checkpoints snapshot the conversation and restore it", () => {
+  const s = filled(process.cwd(), "first");
+  const file = s.checkpoint("before the second step");
+  assert.ok(file && fs.existsSync(file));
+  const points = s.listCheckpoints();
+  assert.equal(points.length, 1);
+  assert.equal(points[0].label, "before the second step");
+  s.addUser("second");
+  s.addAssistant({ content: [{ type: "text", text: "answer two" }] });
+  assert.equal(s.messages.length, 4);
+  assert.equal(s.restoreCheckpoint(file), true);
+  assert.equal(s.messages.length, 2);
+  assert.equal(s.messages[1].content[0].text, "hi!");
+});
+
 // ------------------------------------------------------------------------------------------ thinking is not kept
 
 function thinkingSession(cwd = process.cwd()) {

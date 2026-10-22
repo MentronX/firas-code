@@ -21,7 +21,7 @@ function firas(args, { env = {}, input, timeoutMs = 20_000 } = {}) {
     const started = Date.now();
     const child = spawn(process.execPath, [entry, ...args], {
       cwd: work.dir,
-      env: { ...process.env, FIRAS_HOME: home.dir, FIRAS_LANG: "en", NO_COLOR: "1", ...env },
+      env: { ...process.env, FIRAS_HOME: home.dir, FIRAS_LANG: "en", NO_COLOR: "1", FIRAS_VERIFY: "0", ...env },
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
     let stdout = "";

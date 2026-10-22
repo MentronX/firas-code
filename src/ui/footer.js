@@ -40,9 +40,11 @@ export function footerParts(permissions, effortRef) {
  * The footer line for `width` terminal columns (styled, already ordered for the terminal).
  * permissions: { mode }; effortRef: { value }.
  */
-export function footerLine(permissions, effortRef, width = 80) {
+export function footerLine(permissions, effortRef, width = 80, status = "") {
   const paint = MODE_TONE[permissions?.mode] || c.dim;
   const parts = footerParts(permissions, effortRef);
+  // The git branch (with * when dirty) is the first part to go on a narrow terminal.
+  if (status) parts.push(status);
   const sep = ` ${sym.dot} `;
   const room = Math.max(4, width - 4);
   let shown = parts;
